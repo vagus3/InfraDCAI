@@ -1,10 +1,19 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 sqlalchemy==2.0.35
-asyncpg==0.29.0
+# SQLAlchemy's asyncio support runs on greenlet, but SQLAlchemy only declares it
+# on some platform markers, so a clean install on arm64 macOS installed neither
+# and the app died during startup with "the greenlet library is required".
+greenlet==3.1.1
+asyncpg==0.30.0
 pydantic-settings==2.5.2
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+# passlib 1.7.4 reads bcrypt.__about__.__version__, which bcrypt removed in
+# 4.1. Unpinned, pip installed bcrypt 5.0.0 and every registration returned
+# 500. Pinned here until passlib is replaced -- 1.7.4 is the last release and
+# has not been updated since 2020.
+bcrypt==4.0.1
 redis==5.0.8
 httpx==0.27.2
 email-validator==2.2.0
