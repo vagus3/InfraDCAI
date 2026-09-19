@@ -66,15 +66,26 @@ class DecisionEngineTests(unittest.TestCase):
         kinds = [f["kind"] for f in result.evidence[0].details["findings"]]
         self.assertEqual(kinds, ["terraform_managed"])
 
-    def test_securestring_without_a_value_argument_is_valid(self):
-        # The shape write-only / ephemeral arguments take: Terraform declares
-        # the parameter but never carries the value.
+    def test_securestring_without_a_value_argument_is_unknown_not_valid(self):
+        # This could be a write-only/ephemeral argument, external management,
+        # or an incomplete resource -- the scanner does not run `terraform
+        # validate` and has no provider evidence to tell those apart. Reporting
+        # VALID here would assert compliance without that evidence, which is
+        # the overclaim CODE_RULES.md flagged in this test's previous version.
         result = self._evaluate_tf(
             'resource "aws_ssm_parameter" "managed_elsewhere" {\n'
             '  name = "/demo/elsewhere"\n'
             '  type = "SecureString"\n'
             "}\n"
         )
+        self.assertEqual(result.status, DecisionStatus.UNKNOWN)
+        kinds = [f["kind"] for f in result.evidence[0].details["findings"]]
+        self.assertEqual(kinds, ["no_value_argument"])
+
+    def test_no_securestring_resources_at_all_is_valid(self):
+        # Nothing to be uncertain about -- unlike the case above, there is no
+        # SecureString parameter for the scanner to fail to classify.
+        result = self._evaluate_tf('resource "aws_instance" "app" {\n  ami = "ami-123"\n}\n')
         self.assertEqual(result.status, DecisionStatus.VALID)
 
     def _ack(self, result, **overrides):

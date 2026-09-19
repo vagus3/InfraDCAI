@@ -91,16 +91,31 @@ def _evaluate_metric(decision: dict[str, Any], snapshot: dict[str, Any]) -> Resu
 def _evaluate_terraform_secret(decision: dict[str, Any], repo_root: Path) -> Result:
     scan_root = repo_root / decision["rule"].get("path", ".")
     findings = scan_securestring_parameters(scan_root, relative_to=repo_root)
-    generated = [f for f in findings if f["kind"] == "generated_secret"]
+    violations = [f for f in findings if f["kind"] in ("generated_secret", "terraform_managed")]
+    generated = [f for f in violations if f["kind"] == "generated_secret"]
+    unscannable = [f for f in findings if f["kind"] == "no_value_argument"]
 
-    status = DecisionStatus.VIOLATED if findings else DecisionStatus.VALID
-    if findings:
+    # A resource this scanner cannot classify is not the same as one it
+    # confirmed compliant. Reporting it as VALID would assert a write-only/
+    # ephemeral shape (or any other explanation) without the provider
+    # evidence to back that up -- exactly the overclaim CODE_RULES.md flagged
+    # in the test that used to expect VALID here.
+    if violations:
+        status = DecisionStatus.VIOLATED
         summary = (
-            f"Terraform manages {len(findings)} SecureString parameter(s); "
+            f"Terraform manages {len(violations)} SecureString parameter(s); "
             f"{len(generated)} of them generate the secret themselves. "
             "Provider refresh writes the decrypted value into state in both cases."
         )
+    elif unscannable:
+        status = DecisionStatus.UNKNOWN
+        summary = (
+            f"{len(unscannable)} SecureString parameter(s) have no `value` argument this "
+            "scanner can read. Compliance is not confirmed without terraform validate/plan "
+            "or provider-version evidence for write-only arguments."
+        )
     else:
+        status = DecisionStatus.VALID
         summary = "Terraform does not manage the value of any SecureString parameter."
 
     return Result(

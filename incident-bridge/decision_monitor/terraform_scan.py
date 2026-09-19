@@ -58,18 +58,24 @@ def assignment(block: str, key: str) -> str | None:
 
 
 def scan_securestring_parameters(root: Path, relative_to: Path | None = None) -> list[dict]:
-    """Report every SecureString parameter Terraform manages.
+    """Report every SecureString `aws_ssm_parameter` this scanner can see,
+    classified by what it found for `value`.
 
-    The earlier version of this scanner looked for secret-shaped expressions
-    flowing into `value`, because ADR-010 was written believing that a literal
-    placeholder plus ignore_changes kept the real value out of state. It does
-    not: the AWS provider reads the parameter back with WithDecryption on every
-    refresh and writes the decrypted value into state. ignore_changes suppresses
-    the diff, not the read.
+    The earlier version looked for secret-shaped expressions flowing into
+    `value`, because ADR-010 was written believing that a literal placeholder
+    plus ignore_changes kept the real value out of state. It does not: the AWS
+    provider reads the parameter back with WithDecryption on every refresh and
+    writes the decrypted value into state. ignore_changes suppresses the diff,
+    not the read. So the invariant checked here is "does Terraform manage this
+    resource's value at all", not "where does the value come from".
 
-    So the invariant is not "where does the value come from" but "does Terraform
-    manage this resource at all". A parameter with no `value` argument is left
-    alone -- that is the shape write-only/ephemeral arguments take.
+    A resource with no `value` argument this regex can find is reported
+    separately as `no_value_argument`, not silently treated as compliant. It
+    could be a write-only/ephemeral argument this provider version supports,
+    external management, or simply an incomplete resource that would fail
+    `terraform validate` -- this scanner does not run Terraform and does not
+    know which. Callers should not read the absence of a `value=` match as
+    confirmation of any particular shape.
     """
     base = relative_to or root
     findings: list[dict] = []
@@ -82,7 +88,23 @@ def scan_securestring_parameters(root: Path, relative_to: Path | None = None) ->
             if not param_type or param_type.strip('"') != "SecureString":
                 continue
             value = assignment(block, "value")
+            resource = f"{resource_type}.{resource_name}"
+            file_path = _display_path(tf_file, base)
+
             if value is None:
+                findings.append(
+                    {
+                        "file": file_path,
+                        "resource": resource,
+                        "value_expression": None,
+                        "kind": "no_value_argument",
+                        "message": (
+                            "No `value` argument found by this scanner's regex-based assignment "
+                            "match. This may be a write-only/ephemeral argument, external "
+                            "management, or an incomplete resource -- not verified here."
+                        ),
+                    }
+                )
                 continue
 
             generated = (
@@ -92,8 +114,8 @@ def scan_securestring_parameters(root: Path, relative_to: Path | None = None) ->
             )
             findings.append(
                 {
-                    "file": _display_path(tf_file, base),
-                    "resource": f"{resource_type}.{resource_name}",
+                    "file": file_path,
+                    "resource": resource,
                     "value_expression": value,
                     "kind": "generated_secret" if generated else "terraform_managed",
                     "message": (
