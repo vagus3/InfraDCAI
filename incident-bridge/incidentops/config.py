@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     fix_webhook_url: str | None = None
     notify_webhook_url: str | None = None
 
+    # Bearer token required on fix-dispatch/verify/notify when set. Unset (the
+    # local-demo default) leaves those endpoints open -- see api.py's
+    # require_action_token and DESIGN.md/README.md for what that does and
+    # does not mean about exposing this deployment.
+    api_token: str | None = None
+
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_username: str | None = None
