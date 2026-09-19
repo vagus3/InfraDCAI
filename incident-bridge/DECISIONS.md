@@ -140,21 +140,70 @@ Caddy는 Let's Encrypt 인증서를 알아서 받고 갱신한다.
 
 GitHub Actions는 단기 OIDC 토큰을 AWS 임시 자격증명으로 교환한다. IAM 사용자의 액세스 키를
 GitHub Secrets에 넣는 방식과 비교하면, 유출됐을 때의 차이가 크다. 액세스 키는 만료되지 않고
-어디서든 쓸 수 있지만, OIDC 신뢰 정책은 특정 저장소의 특정 브랜치로 조건이 걸려 있다.
+어디서든 쓸 수 있지만, OIDC 신뢰 정책은 특정 저장소의 특정 경로로 조건이 걸려 있다.
 
 ```
-"token.actions.githubusercontent.com:sub" = "repo:OWNER/REPO:ref:refs/heads/main"
+"token.actions.githubusercontent.com:sub" = "repo:OWNER/REPO:environment:production"
 ```
 
 이 조건이 없으면 GitHub의 아무 저장소나 이 역할을 가져갈 수 있다.
 
-## 10. 시크릿은 Terraform state에 넣지 않았다
+처음에는 `ref:refs/heads/main` 형식으로 적었는데 동작하지 않는다. 배포 job이
+`environment: production`을 선언하면 토큰의 subject가 environment 형식으로 바뀌고, ref 형식은
+아예 나타나지 않는다. 형식이 어긋나면 `AssumeRoleWithWebIdentity`가 첫 스텝에서 실패한다.
 
-Terraform은 SSM 파라미터를 **생성**하지만 실제 값은 모른다. 플레이스홀더로 만들고
-`ignore_changes = [value]`를 걸어둔 뒤, 진짜 값은 AWS CLI로 한 번 넣는다.
+대신 브랜치 제한이 AWS에서 GitHub으로 옮겨간다. 이제 어떤 브랜치가 배포할 수 있는지는 해당
+Environment의 deployment branch policy가 정한다. 그 설정을 하지 않으면 이 environment를 이름으로
+부르는 어떤 브랜치든 역할을 가져갈 수 있다. 선택 사항이 아니다.
 
-이유는 단순하다. Terraform을 거쳐간 값은 state 파일에 평문으로 남는다. `SecureString` 타입이어도
-state에는 그대로 적힌다. state 파일을 실수로 커밋하면 그게 곧 키 유출이다.
+## 10. 시크릿과 Terraform state — 처음 쓴 내용이 틀렸다
+
+원래 이렇게 적었다: 플레이스홀더로 파라미터를 만들고 `ignore_changes = [value]`를 건 뒤
+진짜 값은 AWS CLI로 넣으면, Terraform은 값을 모르므로 state에 남지 않는다.
+
+전제는 맞다. Terraform을 거쳐간 값은 state에 평문으로 남는다. `SecureString`이어도 state에는
+그대로 적히고, state 파일을 실수로 커밋하면 그게 곧 키 유출이다.
+
+해결책이 틀렸다. `ignore_changes`는 plan의 diff를 억제할 뿐 read를 막지 않는다. AWS provider는
+`aws_ssm_parameter`를 refresh할 때 `GetParameter`를 `WithDecryption: true`로 호출하고 복호화된
+값을 state에 기록한다. CLI로 진짜 값을 넣은 뒤 `terraform plan`을 한 번만 돌려도 그 값이
+state로 들어온다.
+
+이건 `postgres_password`만의 문제가 아니었다. `jwt_secret_key`와 `openai_api_key`도 같은
+패턴이므로 세 개 전부 해당한다.
+
+### 어떻게 알게 됐나
+
+`decision_monitor`가 ADR-010 위반을 하나 찾아냈다. `random_password.postgres.result`가
+`SecureString` 파라미터의 `value`로 들어가고 있었다
+([notes](decision_monitor/notes/terraform-secret-state.md)). 그 생성 리소스를 지웠더니 체커가
+`VALID`로 바뀌었다.
+
+그 `VALID`가 거짓이었다. 체커는 "비밀스러운 표현식이 `value`로 흘러드는가"를 검사했는데, 진짜
+불변식은 "Terraform이 이 SecureString 리소스를 관리하는가"였다. ADR의 틀린 전제를 그대로 규칙으로
+옮겼으니, 체커는 틀린 것을 맞다고 확인해주고 있었다.
+
+Terraform 동작보다 이쪽이 더 큰 교훈이다. 검증 도구는 자기가 검사하도록 적힌 것만 검사한다.
+초록불은 "안전하다"가 아니라 "내가 물어본 질문에 대해서는 이상 없다"는 뜻이고, 질문이 틀렸으면
+초록불이 없느니만 못하다.
+
+### 진짜 불변식과 현재 상태
+
+Terraform이 리소스를 관리하는 한 값은 state로 들어온다. 선택지는 둘뿐이다.
+
+1. Terraform이 그 파라미터를 관리하지 않는다. 경로 규약만 정하고 생성과 값은 별도 초기화 절차가
+   소유한다.
+2. write-only / ephemeral 인자를 쓴다. provider와 Terraform 버전이 지원해야 하고 그 동작을 직접
+   검증해야 한다.
+
+지금 한 것은 `random_password` 제거다. Terraform이 비밀을 생성하는 경로를 없앴다. 엄밀히 말해
+ADR-010 충족이 아니라, 세 파라미터가 같은 문제를 공유하도록 정리한 것이다.
+
+아직 안 한 것은 소유권 분리(1번)다. 제출 시점 기준 ADR-010은 미해결이고, 체커가 이 상태를
+`VALID`로 보고하지 않도록 규칙을 고쳤다.
+
+이 결정을 뒤집는 시점: 지금. 남의 비밀을 다루기 전에 1번을 끝내야 한다. 과거 state에 이미
+비밀이 들어갔다면 경로를 고치는 것만으로 이력에서 사라지지 않는다는 점도 같이 처리해야 한다.
 
 ## 11. 토큰을 localStorage 대신 sessionStorage에 저장
 
