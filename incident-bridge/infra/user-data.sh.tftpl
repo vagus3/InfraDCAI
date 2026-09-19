@@ -18,6 +18,43 @@ mkdir -p /opt/app
 cd /opt/app
 
 # ---------------------------------------------------------------------------
+# Database password bootstrap
+#
+# ADR-010 says Terraform creates the SSM parameter but never generates or holds
+# the value, so it arrives here as a literal placeholder. This is where the real
+# value has to appear -- and it has to appear *now*, before deploy.sh ever runs
+# docker compose up. Postgres writes POSTGRES_PASSWORD into its volume during
+# initdb and ignores the variable on every start after that, so a password that
+# shows up late does not fix anything: it desyncs .env from the database, the
+# app fails /ready, and deploy.sh rolls back an image that was never the problem.
+#
+# Three things this block has to get right:
+#
+#   1. Only write when the stored value is still the placeholder. Overwriting a
+#      password that a running database already baked in is unrecoverable
+#      without touching the volume.
+#   2. `set -e` is active (line 5). If the parameter is missing, get-parameter
+#      exits non-zero and takes the whole boot down with it unless tolerated.
+#   3. `set -x` is active. Every command is echoed to
+#      /var/log/cloud-init-output.log, which `aws ec2 get-console-output` will
+#      happily hand to anyone with that IAM permission. A password expanded on
+#      a traced command line is a password in the console log.
+#
+# Terraform renders this file: shell variables need $${VAR}, while ${ssm_prefix}
+# and ${aws_region} are Terraform values and stay bare.
+# ---------------------------------------------------------------------------
+PLACEHOLDER="set-me-with-the-aws-cli"
+
+# TODO(you): read the current parameter value into a shell variable, and if it
+# still equals $${PLACEHOLDER}, generate a random password and store it:
+#
+#   aws ssm put-parameter --name ${ssm_prefix}/postgres_password \
+#     --type SecureString --overwrite --region ${aws_region} --value "$${PW}"
+#
+# Roughly 8 lines. Mind the three points above.
+
+
+# ---------------------------------------------------------------------------
 # Reverse proxy
 #
 # Local development uses nginx, which is worth writing by hand once to see

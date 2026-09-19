@@ -1,8 +1,7 @@
 terraform {
   required_version = ">= 1.5"
   required_providers {
-    aws    = { source = "hashicorp/aws", version = "~> 5.40" }
-    random = { source = "hashicorp/random", version = "~> 3.6" }
+    aws = { source = "hashicorp/aws", version = "~> 5.40" }
   }
 }
 
@@ -120,15 +119,14 @@ locals {
   ssm_prefix = "/${var.project_name}"
 }
 
-resource "random_password" "postgres" {
-  length  = 32
-  special = false
-}
-
 resource "aws_ssm_parameter" "postgres_password" {
   name  = "${local.ssm_prefix}/postgres_password"
   type  = "SecureString"
-  value = random_password.postgres.result
+  value = "set-me-with-the-aws-cli"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
 }
 
 resource "aws_ssm_parameter" "jwt_secret_key" {
@@ -190,6 +188,28 @@ resource "aws_iam_role_policy" "read_secrets" {
       Effect   = "Allow"
       Action   = ["ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath"]
       Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_prefix}/*"
+    }]
+  })
+}
+
+# The one thing the instance is allowed to WRITE, and only this one parameter.
+#
+# postgres_password differs from the other two secrets: nobody possesses its
+# value, it just has to be a random string that exists before Postgres runs
+# initdb. Postgres bakes POSTGRES_PASSWORD into the volume on first start and
+# ignores it forever after, so a value that arrives late is worse than useless
+# -- it desyncs .env from the database. Generating it during boot removes the
+# window where a push to main could initdb with the placeholder.
+resource "aws_iam_role_policy" "bootstrap_postgres_password" {
+  name = "${var.project_name}-bootstrap-postgres-password"
+  role = aws_iam_role.ec2.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "ssm:PutParameter"
+      Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter${local.ssm_prefix}/postgres_password"
     }]
   })
 }
