@@ -22,7 +22,9 @@ resource "aws_iam_role" "github_actions" {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
           # Without this, any repository on GitHub could assume the role.
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/${var.github_branch}"
+          # The job sets `environment: production`, so the subject is the
+          # environment form -- the ref form never appears and would never match.
+          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:environment:${var.github_environment}"
         }
       }
     }]

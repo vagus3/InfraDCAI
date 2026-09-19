@@ -21,10 +21,18 @@ variable "github_repo" {
   type        = string
 }
 
-variable "github_branch" {
-  description = "Only pushes to this branch may deploy."
+# The deploy job declares `environment: production`, which changes the OIDC
+# token's subject from the ref form to the environment form. The trust policy
+# has to match whichever form the workflow actually produces.
+#
+# Note what moved: with an environment subject, AWS no longer enforces the
+# branch. That restriction now lives in the GitHub Environment's deployment
+# branch policy, and it is not optional -- without it, any branch that can run
+# a job naming this environment can assume the role.
+variable "github_environment" {
+  description = "GitHub Environment named by the deploy job. Only it may assume the role."
   type        = string
-  default     = "main"
+  default     = "production"
 }
 
 variable "openai_model" {
