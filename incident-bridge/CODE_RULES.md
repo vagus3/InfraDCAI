@@ -128,40 +128,65 @@
 - 로컬 데모의 접근 제한과 운영 인증을 구분한다. 공개하지 않을 데모에 큰 인증 플랫폼을
   무조건 추가하지 않지만, 실제 배포의 접근 제한을 확인하기 전에는 공개 가능한 API라고 쓰지 않는다.
 
-## 확인된 개선 후보 — 미수정
+## 확인된 개선 후보 — 2026-09-20 재현 결과로 갱신
 
-아래는 2026-09-19에 읽은 코드의 상태다. 이미 수정됐다면 재현 결과로 갱신한다.
+2026-09-19에 읽은 상태를 아래 표에 적용 여부와 함께 남긴다. 각 항목은 `PYTHONPATH=. .venv/bin/python
+-m pytest -q incidentops/tests decision_monitor/tests app/tests`로 재현했고, 커밋 메시지에
+근거를 남겼다.
 
-| 위치 | 확인한 내용 | 적용할 기준 |
-|---|---|---|
-| matching.py | 심각도 기준 0.2, metric 별칭 반복, symptom 문자열 비교 | 정책 설정·정규화·구조화된 분류 |
-| matching.py / incident_store.py | 최신 사건 하나를 위해 미해결 사건 전체 조회 | 상관 조건이 있는 제한 조회 |
-| triage.py | SHA 존재만으로 CODE_REGRESSION, 표시 문구로 원인 판단 | 사실과 가설 분리 |
-| service.py | 상태·시각·저장 반복, 이전 상태 검증 없이 전이 | 일관된 전이 검증과 저장 |
-| api.py | 반복 KeyError 처리, import 시 tracker/DB 생성 | 도메인 예외·명시적 의존성 생성 |
-| app/llm.py | 호출마다 client 생성, timeout 없음, 종료 이유 소실 | client 수명·취소·완료 의미 보존 |
-| integrations/notifications.py | async 함수 내부 동기 SMTP | blocking I/O 경계 |
-| incidentops/static/dashboard.html | 외부 필드 innerHTML 삽입, Verify의 성공 bool 고정 | 안전한 DOM·실제 검증 결과 |
-| decision_monitor/tests/test_engine.py | value 없는 SecureString fixture를 VALID로 기대 | provider의 유효성·read 동작 증거 없이 안전한 write-only 형태로 단정하지 않음 |
+| 위치 | 확인한 내용 | 적용한 기준 | 상태 |
+|---|---|---|---|
+| matching.py | 심각도 기준 0.2, metric 별칭 반복, symptom 문자열 비교 | `error_rate_sev2_ratio` 설정으로 이동, alias 테이블 단일화 | 적용됨 |
+| matching.py / incident_store.py | 최신 사건 하나를 위해 미해결 사건 전체 조회 | `IncidentStore.latest_open_incident()`가 상관 시간 창·`ORDER BY`·`LIMIT 1`을 SQL로 처리 | 적용됨 |
+| triage.py | SHA 존재만으로 CODE_REGRESSION, 표시 문구로 원인 판단 | SHA 상관은 `confidence="low"`와 상관 관계임을 명시하는 문구로, 구조화된 신호(`dependency`, readiness 실패)는 `medium` 유지 | 적용됨 |
+| service.py | 상태·시각·저장 반복, 이전 상태 검증 없이 전이 | `_set_status()`로 반복 제거, `RESOLVED` 상태에서의 모든 전이는 `IncidentAlreadyResolved` | 적용됨 |
+| api.py | 반복 KeyError 처리, import 시 tracker/DB 생성 | `_map_domain_errors()` 컨텍스트 매니저, tracker는 lifespan에서 `app.state`로 생성 | 적용됨 |
+| app/llm.py | 호출마다 client 생성, timeout 없음, 종료 이유 소실 | client는 선택적 주입(수명은 호출자 결정), 명시적 connect/read/write/pool timeout, `done`/`[DONE]` 없이 끝나면 `UpstreamIncompleteError` | 적용됨. `app/tests/test_llm.py`로 검증, `chat.py`도 새 예외를 처리하도록 수정 |
+| integrations/notifications.py | async 함수 내부 동기 SMTP | `asyncio.to_thread`로 이동 | 적용됨 |
+| incidentops/static/dashboard.html | 외부 필드 innerHTML 삽입, Verify의 성공 bool 고정 | `createElement`/`textContent`로 교체, inline onclick 제거, Verify 버튼과 로그에 합성 값임을 표시 | 적용됨 |
+| decision_monitor/tests/test_engine.py | value 없는 SecureString fixture를 VALID로 기대 | 해당 모양은 `no_value_argument`로 분리해 `UNKNOWN` 처리. `VALID`는 SecureString 리소스가 아예 없을 때만 | 적용됨 |
 
-공개 노출 전에는 대시보드의 외부 문자열 렌더링과 입력 인증부터 별도로 점검한다.
+추가로, 표에는 없었지만 같은 작업 중 발견해 같이 처리한 것: `fix-dispatch`·`notify`·`verify`에
+`INCIDENTOPS_API_TOKEN` 기반 호출자 인증(§8), webhook payload를 `external.py`의 허용 목록으로 축소
+(고객 문의 원문 등 `fact.details` 제외), `app/routers/chat.py`가 `UpstreamIncompleteError`를
+`httpx` 오류와 같은 방식으로 처리하도록 연결.
+
+의도적으로 남겨둔 것:
+
+- `triage.py`의 `_from_webhook()`은 여전히 incident 전체를 직렬화해 외부 triage webhook으로
+  보낸다. `dispatch_fix`/`send_notification`과 같은 종류의 노출이지만 이 표에 명시되지 않아
+  범위를 넘겨 고치지 않았다.
+- `IncidentStore`의 SQLite 호출은 `async def` 안에서 동기로 실행된다(§5의 blocking I/O 원칙).
+  표에는 `integrations/notifications.py`의 SMTP만 명시돼 있었고, 이건 우선순위 표의 마지막
+  항목("측정에 따른 조회 최적화")에 가까운 성격이라 손대지 않았다.
+- `/api/v1/incidents` 조회는 여전히 페이지 크기 제한이 없다. 우선순위 표가 조회 최적화를
+  가장 뒤로 두었고 아직 측정하지 않았다.
+
+공개 노출 전에는 대시보드의 외부 문자열 렌더링과 입력 인증부터 별도로 점검한다는 문장은
+이제 완료된 항목을 가리킨다. 다음에 볼 것은 위 "의도적으로 남겨둔 것"이다.
 학습 순서는 [LEARNING.md](LEARNING.md), 동작 규약은 [DESIGN.md](DESIGN.md)를 따른다.
 
-### 추가 확인 — 2026-09-20
+### 추가 확인 — 2026-09-20, 2026-09-20 수정 반영
 
-코드는 수정하지 않았다. 아래 세 항목은 프로젝트 `.venv`의 Python으로 기존
-`IncidentStore`·`IncidentMatcher`를 호출해 재현했다. 각 실험은 임시 SQLite와 합성 입력만
-사용했으며 외부 API·메일·클라우드를 호출하지 않았다. 재현 절차와 결과는 다음과 같다.
+아래 세 항목은 최초 작성 시 프로젝트 `.venv`의 Python으로 기존 `IncidentStore`·`IncidentMatcher`를
+호출해 재현했다("관찰 결과" 열). 이후 같은 날 수정했고, 회귀 테스트로 고정했다("수정 후" 열).
+각 회귀 테스트는 `incidentops/tests/test_incidentops.py`에 있다.
 
-| 항목 | 입력·절차 | 관찰 결과 | 수정 시 완료 조건 |
+| 항목 | 입력·절차 | 관찰 결과 (수정 전) | 수정 후 |
 |---|---|---|---|
-| 시간 구간 | 현재 UTC보다 1시간 전인 시각을 `+09:00`으로 표현한 신호와 하루 뒤 신호를 저장하고 `recent_telemetry(tenant, 30)` 호출 | 두 신호 모두 반환됨. offset 혼용 문자열 비교와 조회 상한 부재 | 선택한 기준 시각의 구간 밖 자료 제외, 같은 순간의 다른 offset 표현이 동일하게 처리됨 |
-| 재전송 | 같은 tenant·message_id의 `CustomerEmail`을 `add_customer_email()`에 두 번 전달 | 같은 incident에 고객 fact 2개 | 같은 수신 이벤트는 1회 반영. 내용이 같아도 서로 다른 이벤트는 보존 |
-| 장애 연결 | 같은 tenant에서 `/login`의 5xx 신호 후 하루 뒤 `/chat/stream` 지연 신호 전달 | 같은 incident ID로 합쳐짐 | DESIGN의 경로·증상·시간 조건을 적용. 근거가 부족하면 자동 병합하지 않음 |
+| 시간 구간 | 현재 UTC보다 1시간 전인 시각을 `+09:00`으로 표현한 신호와 하루 뒤 신호를 저장하고 `recent_telemetry(tenant, 30)` 호출 | 두 신호 모두 반환됨. offset 혼용 문자열 비교와 조회 상한 부재 | naive datetime 거부, 모든 시각 UTC 정규화, 창을 양쪽으로 제한(`test_future_dated_signal_falls_out_of_the_correlation_window`) |
+| 재전송 | 같은 tenant·message_id의 `CustomerEmail`을 `add_customer_email()`에 두 번 전달 | 같은 incident에 고객 fact 2개 | `(tenant, message_id)` unique index + 재전송은 기존 incident를 그대로 반환(`test_resent_customer_email_does_not_duplicate_the_fact`) |
+| 장애 연결 | 같은 tenant에서 `/login`의 5xx 신호 후 하루 뒤 `/chat/stream` 지연 신호 전달 | 같은 incident ID로 합쳐짐 | `latest_open_incident()`가 상관 시간 창을 SQL에서 강제(`test_unrelated_failure_a_day_later_does_not_merge_into_the_old_incident`) |
 
-별도로 정적 확인한 사항: `incidentops/api.py`에는 자체 인증·작업 권한 검사가 없고,
-`fix-dispatch`·`notify`는 설정에 따라 외부 전송을 실행한다. integrations의 webhook payload는
-incident 전체를 포함한다. 배포 앞단의 접근 제한 유무와 실제 외부 노출 여부는 이번에 검증하지 않았다.
+endpoint/symptom까지 포함한 전체 상관 조건(DESIGN.md 3번)은 아직 시간 창만 적용했다. 같은 시간
+창 안에서 서로 다른 endpoint/symptom의 신호가 합쳐지는 경우는 남아 있다.
+
+별도로 정적 확인했던 사항(수정됨): `incidentops/api.py`에는 자체 인증·작업 권한 검사가 없었다.
+`fix-dispatch`·`notify`·`verify`는 이제 `INCIDENTOPS_API_TOKEN`이 설정된 경우 `Authorization:
+Bearer` 검사를 거친다. 미설정 시 이전과 동일하게 열려 있으며, 이것이 미설정 배포를 노출해도
+안전하다는 뜻은 아니다. integrations의 webhook payload는 incident 전체를 포함했으나 이제
+`external.py`의 허용 목록만 나간다(고객 문의 원문 등 `fact.details`는 제외). 배포 앞단의
+접근 제한 유무와 실제 외부 노출 여부는 이번에도 검증하지 않았다.
 
 우선순위는 공개 공유 전 접근 통제·안전한 화면 출력·전송 데이터 범위, 핵심 기능 정확성을 위한
 시간/상관/중복 처리·증거 기반 회복 판정, 이후 측정에 따른 조회 최적화 순이다.
