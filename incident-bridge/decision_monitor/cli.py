@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .engine import evaluate
+from .engine import acknowledgement_state, evaluate
 from .models import DecisionStatus
 from .report import print_results
 
@@ -72,14 +72,18 @@ def exit_code(results: list) -> int:
 
     Reporting a violation and then exiting 0 is how a checker becomes
     decoration: CI stays green, the finding scrolls past, and the tool has
-    taught everyone to ignore it. An acknowledged violation is different --
-    somebody wrote down that they are shipping with it and when they will
-    revisit -- so it prints loudly but does not block.
+    taught everyone to ignore it.
+
+    An acknowledged violation is different -- somebody wrote down that they are
+    shipping with it and when they will revisit -- so it prints loudly but does
+    not block. "Acknowledged" has to mean something, though: the record must be
+    complete, unexpired, and bound to the findings that were actually reviewed.
+    A record that merely exists is a permanent bypass wearing a date.
     """
     blocking = [
         r
         for r in results
-        if r.status == DecisionStatus.VIOLATED and not getattr(r, "acknowledgement", None)
+        if r.status == DecisionStatus.VIOLATED and acknowledgement_state(r) != "active"
     ]
     return 1 if blocking else 0
 

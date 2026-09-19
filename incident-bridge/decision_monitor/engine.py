@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import operator
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +90,7 @@ def _evaluate_metric(decision: dict[str, Any], snapshot: dict[str, Any]) -> Resu
 
 def _evaluate_terraform_secret(decision: dict[str, Any], repo_root: Path) -> Result:
     scan_root = repo_root / decision["rule"].get("path", ".")
-    findings = scan_securestring_parameters(scan_root)
+    findings = scan_securestring_parameters(scan_root, relative_to=repo_root)
     generated = [f for f in findings if f["kind"] == "generated_secret"]
 
     status = DecisionStatus.VIOLATED if findings else DecisionStatus.VALID
@@ -133,3 +136,46 @@ def evaluate(decisions: list[dict[str, Any]], snapshot: dict[str, Any], repo_roo
                 )
             )
     return results
+
+
+# ---------------------------------------------------------------------------
+# Acknowledgements
+#
+# An acknowledged violation does not block CI. That makes the acknowledgement a
+# security control, so it needs the properties a control needs: it has to
+# expire, it has to be complete, and it has to be bound to the finding somebody
+# actually looked at. Without the last one, accepting "three parameters
+# Terraform manages" would go on silencing the check after a fourth appears, or
+# after one of them starts generating its own secret again.
+# ---------------------------------------------------------------------------
+
+REQUIRED_ACK_FIELDS = ("accepted_on", "expires_on", "owner", "reason", "fingerprint")
+
+
+def finding_fingerprint(result: Result) -> str:
+    """Stable digest of what the check actually found."""
+    payload = [{"source": e.source, "details": e.details} for e in result.evidence]
+    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def acknowledgement_state(result: Result, today: date | None = None) -> str:
+    """One of: none, malformed, expired, stale, active.
+
+    Only "active" suppresses a failure. Every other outcome, including a
+    malformed record, blocks -- a control that cannot be read is not a control.
+    """
+    ack = result.acknowledgement
+    if not ack:
+        return "none"
+    if any(not ack.get(field) for field in REQUIRED_ACK_FIELDS):
+        return "malformed"
+    try:
+        expires = date.fromisoformat(str(ack["expires_on"]))
+    except (TypeError, ValueError):
+        return "malformed"
+    if expires < (today or date.today()):
+        return "expired"
+    if str(ack["fingerprint"]) != finding_fingerprint(result):
+        return "stale"
+    return "active"

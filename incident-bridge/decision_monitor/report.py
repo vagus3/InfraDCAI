@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import json
+from .engine import acknowledgement_state, finding_fingerprint
 from .models import DecisionStatus, Result
 
+
+ACK_REASON = {
+    "malformed": "record incomplete or unreadable",
+    "expired": "acknowledgement expired",
+    "stale": "findings changed since it was accepted",
+}
 
 SYMBOLS = {
     DecisionStatus.VALID: "✓",
@@ -25,13 +32,22 @@ def print_results(results: list[Result], verbose: bool = True) -> None:
                     print("  Details:")
                     for line in compact.splitlines():
                         print(f"    {line}")
-            ack = getattr(result, "acknowledgement", None)
-            if ack:
-                print(
-                    f"  Accepted: {ack.get('accepted_on')} by {ack.get('owner')}, "
-                    f"revisit by {ack.get('expires_on')}"
-                )
-                print(f"            {ack.get('reason')}")
+            if result.status == DecisionStatus.VIOLATED:
+                state = acknowledgement_state(result)
+                ack = result.acknowledgement or {}
+                if state == "active":
+                    print(
+                        f"  Accepted: {ack.get('accepted_on')} by {ack.get('owner')}, "
+                        f"revisit by {ack.get('expires_on')}"
+                    )
+                    print(f"            {ack.get('reason')}")
+                elif state == "none":
+                    print("  Accepted: no -- this blocks CI")
+                else:
+                    print(f"  Accepted: NO ({ACK_REASON[state]}) -- this blocks CI")
+                    if state == "stale":
+                        print(f"            recorded {ack.get('fingerprint')}, "
+                              f"found {finding_fingerprint(result)}")
             print(f"  Why: {result.reason}\n")
 
     counts = {status: 0 for status in DecisionStatus}

@@ -44,9 +44,11 @@
       "reason": "The AWS provider reads aws_ssm_parameter with WithDecryption and stores the result in state. ignore_changes suppresses the plan diff, not the read.",
       "acknowledgement": {
         "accepted_on": "2026-09-19",
-        "reason": "Found while correcting the ADR itself. Separating ownership means moving parameter creation out of Terraform, which is not a change to make hours before a submission deadline.",
         "expires_on": "2026-10-31",
-        "owner": "project maintainer"
+        "owner": "project maintainer",
+        "reason": "Found while correcting the ADR itself. Separating ownership means moving parameter creation out of Terraform, which is not a change to make hours before a submission deadline.",
+        "fingerprint": "6fe701c20d674862",
+        "fingerprint_covers": "3 SecureString parameters managed by Terraform in infra/main.tf, none of them generating their own secret"
       }
     }
   ]

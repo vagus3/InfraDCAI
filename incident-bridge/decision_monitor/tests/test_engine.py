@@ -1,10 +1,11 @@
 import json
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from decision_monitor.cli import exit_code
-from decision_monitor.engine import evaluate
+from decision_monitor.engine import acknowledgement_state, evaluate, finding_fingerprint
 from decision_monitor.models import DecisionStatus
 
 
@@ -76,6 +77,82 @@ class DecisionEngineTests(unittest.TestCase):
         )
         self.assertEqual(result.status, DecisionStatus.VALID)
 
+    def _ack(self, result, **overrides):
+        ack = {
+            "accepted_on": "2026-09-19",
+            "expires_on": "2026-12-31",
+            "owner": "someone",
+            "reason": "known, scheduled",
+            "fingerprint": finding_fingerprint(result),
+        }
+        ack.update(overrides)
+        result.acknowledgement = ack
+        return result
+
+    def test_findings_use_repo_relative_paths(self):
+        # An absolute path would make the fingerprint differ between a laptop
+        # and CI, so every run would look like drift.
+        result = self._evaluate_tf(
+            'resource "aws_ssm_parameter" "password" {\n'
+            '  name = "/demo/password"\n'
+            '  type = "SecureString"\n'
+            "  value = random_password.db.result\n"
+            "}\n"
+        )
+        files = [f["file"] for f in result.evidence[0].details["findings"]]
+        self.assertEqual(files, ["infra/main.tf"])
+
+    def test_acknowledgement_must_be_complete_unexpired_and_bound(self):
+        result = self._evaluate_tf(
+            'resource "aws_ssm_parameter" "password" {\n'
+            '  name = "/demo/password"\n'
+            '  type = "SecureString"\n'
+            "  value = random_password.db.result\n"
+            "}\n"
+        )
+        today = date(2026, 9, 19)
+
+        result.acknowledgement = None
+        self.assertEqual(acknowledgement_state(result, today), "none")
+
+        # Merely existing is not enough -- that was the original bug.
+        result.acknowledgement = {"owner": "someone"}
+        self.assertEqual(acknowledgement_state(result, today), "malformed")
+
+        self._ack(result, expires_on="2026-09-18")
+        self.assertEqual(acknowledgement_state(result, today), "expired")
+
+        self._ack(result, fingerprint="0000000000000000")
+        self.assertEqual(acknowledgement_state(result, today), "stale")
+
+        self._ack(result)
+        self.assertEqual(acknowledgement_state(result, today), "active")
+
+    def test_acknowledgement_goes_stale_when_the_violation_grows(self):
+        one = (
+            'resource "aws_ssm_parameter" "a" {\n'
+            '  name = "/demo/a"\n'
+            '  type = "SecureString"\n'
+            '  value = "placeholder"\n'
+            "}\n"
+        )
+        accepted = self._ack(self._evaluate_tf(one))
+        self.assertEqual(acknowledgement_state(accepted, date(2026, 9, 19)), "active")
+
+        # A second parameter appears. The old acknowledgement covered one
+        # finding, so it must not keep silencing the check.
+        worse = self._evaluate_tf(
+            one
+            + 'resource "aws_ssm_parameter" "b" {\n'
+            '  name = "/demo/b"\n'
+            '  type = "SecureString"\n'
+            "  value = random_password.b.result\n"
+            "}\n"
+        )
+        worse.acknowledgement = accepted.acknowledgement
+        self.assertEqual(acknowledgement_state(worse, date(2026, 9, 19)), "stale")
+        self.assertEqual(exit_code([worse]), 1)
+
     def test_acknowledged_violation_does_not_block_ci(self):
         violated = self._evaluate_tf(
             'resource "aws_ssm_parameter" "password" {\n'
@@ -89,7 +166,7 @@ class DecisionEngineTests(unittest.TestCase):
         violated.acknowledgement = None
         self.assertEqual(exit_code([violated]), 1)
 
-        violated.acknowledgement = {"accepted_on": "2026-09-19", "owner": "me"}
+        self._ack(violated)
         self.assertEqual(exit_code([violated]), 0)
 
 

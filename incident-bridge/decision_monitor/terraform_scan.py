@@ -57,7 +57,7 @@ def assignment(block: str, key: str) -> str | None:
     return match.group("value").strip()
 
 
-def scan_securestring_parameters(root: Path) -> list[dict]:
+def scan_securestring_parameters(root: Path, relative_to: Path | None = None) -> list[dict]:
     """Report every SecureString parameter Terraform manages.
 
     The earlier version of this scanner looked for secret-shaped expressions
@@ -71,6 +71,7 @@ def scan_securestring_parameters(root: Path) -> list[dict]:
     manage this resource at all". A parameter with no `value` argument is left
     alone -- that is the shape write-only/ephemeral arguments take.
     """
+    base = relative_to or root
     findings: list[dict] = []
     for tf_file in sorted(root.rglob("*.tf")):
         text = tf_file.read_text(encoding="utf-8")
@@ -91,7 +92,7 @@ def scan_securestring_parameters(root: Path) -> list[dict]:
             )
             findings.append(
                 {
-                    "file": str(tf_file),
+                    "file": _display_path(tf_file, base),
                     "resource": f"{resource_type}.{resource_name}",
                     "value_expression": value,
                     "kind": "generated_secret" if generated else "terraform_managed",
@@ -104,3 +105,16 @@ def scan_securestring_parameters(root: Path) -> list[dict]:
                 }
             )
     return findings
+
+
+def _display_path(path: Path, base: Path) -> str:
+    """Repo-relative where possible.
+
+    An absolute path makes findings differ per machine, which matters because
+    an acknowledgement is bound to a fingerprint of the findings -- a path that
+    changes between a laptop and CI would read as drift every time.
+    """
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return str(path)
