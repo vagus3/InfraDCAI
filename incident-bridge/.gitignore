@@ -10,3 +10,6 @@ nginx/certs/
 # IncidentOps runtime artifacts
 incidentops/data/*.db
 incidentops/data/artifacts/
+
+# local virtualenv
+.venv/
