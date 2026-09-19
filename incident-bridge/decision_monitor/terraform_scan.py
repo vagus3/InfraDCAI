@@ -57,7 +57,20 @@ def assignment(block: str, key: str) -> str | None:
     return match.group("value").strip()
 
 
-def scan_securestring_sources(root: Path) -> list[dict]:
+def scan_securestring_parameters(root: Path) -> list[dict]:
+    """Report every SecureString parameter Terraform manages.
+
+    The earlier version of this scanner looked for secret-shaped expressions
+    flowing into `value`, because ADR-010 was written believing that a literal
+    placeholder plus ignore_changes kept the real value out of state. It does
+    not: the AWS provider reads the parameter back with WithDecryption on every
+    refresh and writes the decrypted value into state. ignore_changes suppresses
+    the diff, not the read.
+
+    So the invariant is not "where does the value come from" but "does Terraform
+    manage this resource at all". A parameter with no `value` argument is left
+    alone -- that is the shape write-only/ephemeral arguments take.
+    """
     findings: list[dict] = []
     for tf_file in sorted(root.rglob("*.tf")):
         text = tf_file.read_text(encoding="utf-8")
@@ -71,21 +84,23 @@ def scan_securestring_sources(root: Path) -> list[dict]:
             if value is None:
                 continue
 
-            # Literal placeholders still enter state, but they are not secret
-            # material. Dynamic secret sources (random_password, sensitive vars,
-            # etc.) are the violation this ADR is meant to prevent.
-            dynamic_secret = (
+            generated = (
                 "random_password." in value
                 or re.search(r"\bvar\.(?:.*secret|.*password|.*token|.*key)\b", value, re.I)
                 is not None
             )
-            if dynamic_secret:
-                findings.append(
-                    {
-                        "file": str(tf_file),
-                        "resource": f"{resource_type}.{resource_name}",
-                        "value_expression": value,
-                        "message": "SecureString receives secret material through Terraform; the value will be represented in Terraform state.",
-                    }
-                )
+            findings.append(
+                {
+                    "file": str(tf_file),
+                    "resource": f"{resource_type}.{resource_name}",
+                    "value_expression": value,
+                    "kind": "generated_secret" if generated else "terraform_managed",
+                    "message": (
+                        "Terraform generates this secret, so the value is in state from creation."
+                        if generated
+                        else "Terraform manages this parameter, so provider refresh reads the "
+                        "decrypted value into state regardless of ignore_changes."
+                    ),
+                }
+            )
     return findings

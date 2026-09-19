@@ -25,6 +25,13 @@ def print_results(results: list[Result], verbose: bool = True) -> None:
                     print("  Details:")
                     for line in compact.splitlines():
                         print(f"    {line}")
+            ack = getattr(result, "acknowledgement", None)
+            if ack:
+                print(
+                    f"  Accepted: {ack.get('accepted_on')} by {ack.get('owner')}, "
+                    f"revisit by {ack.get('expires_on')}"
+                )
+                print(f"            {ack.get('reason')}")
             print(f"  Why: {result.reason}\n")
 
     counts = {status: 0 for status in DecisionStatus}

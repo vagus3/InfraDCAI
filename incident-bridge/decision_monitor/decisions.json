@@ -24,21 +24,30 @@
         "type": "no_public_ingress",
         "protocol": "tcp",
         "port": 22,
-        "cidrs": ["0.0.0.0/0", "::/0"]
+        "cidrs": [
+          "0.0.0.0/0",
+          "::/0"
+        ]
       },
       "reason": "The workload deliberately uses SSM for administration, so opening SSH contradicts the accepted architecture decision."
     },
     {
       "id": "ADR-010",
       "title": "Do not put real secret material in Terraform state",
-      "source": "DECISIONS.md#10-시크릿은-terraform-state에-넣지-않았다",
+      "source": "DECISIONS.md#10-시크릿과-terraform-state--처음-쓴-내용이-틀렸다",
       "kind": "invariant",
-      "statement": "Terraform may create SecureString parameters, but must not generate or receive the real secret value.",
+      "statement": "Terraform must not own the value of a SecureString parameter. A provider refresh reads the decrypted value into state, so managing the resource at all puts the secret in state.",
       "rule": {
-        "type": "terraform_securestring_no_generated_secret",
+        "type": "terraform_securestring_ownership",
         "path": "infra"
       },
-      "reason": "Values handled by Terraform are persisted in state even when the destination is SSM SecureString."
+      "reason": "The AWS provider reads aws_ssm_parameter with WithDecryption and stores the result in state. ignore_changes suppresses the plan diff, not the read.",
+      "acknowledgement": {
+        "accepted_on": "2026-09-19",
+        "reason": "Found while correcting the ADR itself. Separating ownership means moving parameter creation out of Terraform, which is not a change to make hours before a submission deadline.",
+        "expires_on": "2026-10-31",
+        "owner": "project maintainer"
+      }
     }
   ]
 }

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from decision_monitor.cli import exit_code
 from decision_monitor.engine import evaluate
 from decision_monitor.models import DecisionStatus
 
@@ -26,21 +27,70 @@ class DecisionEngineTests(unittest.TestCase):
         results = evaluate(DECISIONS[:2], snapshot, ROOT)
         self.assertTrue(all(result.status == DecisionStatus.VALID for result in results))
 
-    def test_generated_securestring_secret_is_violation(self):
+    def _evaluate_tf(self, body: str):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             infra = root / "infra"
             infra.mkdir()
-            (infra / "main.tf").write_text(
-                '''resource "aws_ssm_parameter" "password" {\n'''
-                '''  name = "/demo/password"\n'''
-                '''  type = "SecureString"\n'''
-                '''  value = random_password.db.result\n'''
-                '''}\n''',
-                encoding="utf-8",
-            )
-            result = evaluate([DECISIONS[2]], {}, root)[0]
-            self.assertEqual(result.status, DecisionStatus.VIOLATED)
+            (infra / "main.tf").write_text(body, encoding="utf-8")
+            return evaluate([DECISIONS[2]], {}, root)[0]
+
+    def test_generated_securestring_secret_is_violation(self):
+        result = self._evaluate_tf(
+            'resource "aws_ssm_parameter" "password" {\n'
+            '  name = "/demo/password"\n'
+            '  type = "SecureString"\n'
+            "  value = random_password.db.result\n"
+            "}\n"
+        )
+        self.assertEqual(result.status, DecisionStatus.VIOLATED)
+        kinds = [f["kind"] for f in result.evidence[0].details["findings"]]
+        self.assertEqual(kinds, ["generated_secret"])
+
+    def test_placeholder_securestring_is_still_a_violation(self):
+        # The point of the corrected rule: a literal placeholder plus
+        # ignore_changes does not keep the value out of state, because the
+        # provider reads it back decrypted on every refresh.
+        result = self._evaluate_tf(
+            'resource "aws_ssm_parameter" "token" {\n'
+            '  name = "/demo/token"\n'
+            '  type = "SecureString"\n'
+            '  value = "set-me-with-the-aws-cli"\n'
+            "  lifecycle {\n"
+            "    ignore_changes = [value]\n"
+            "  }\n"
+            "}\n"
+        )
+        self.assertEqual(result.status, DecisionStatus.VIOLATED)
+        kinds = [f["kind"] for f in result.evidence[0].details["findings"]]
+        self.assertEqual(kinds, ["terraform_managed"])
+
+    def test_securestring_without_a_value_argument_is_valid(self):
+        # The shape write-only / ephemeral arguments take: Terraform declares
+        # the parameter but never carries the value.
+        result = self._evaluate_tf(
+            'resource "aws_ssm_parameter" "managed_elsewhere" {\n'
+            '  name = "/demo/elsewhere"\n'
+            '  type = "SecureString"\n'
+            "}\n"
+        )
+        self.assertEqual(result.status, DecisionStatus.VALID)
+
+    def test_acknowledged_violation_does_not_block_ci(self):
+        violated = self._evaluate_tf(
+            'resource "aws_ssm_parameter" "password" {\n'
+            '  name = "/demo/password"\n'
+            '  type = "SecureString"\n'
+            "  value = random_password.db.result\n"
+            "}\n"
+        )
+        self.assertEqual(violated.status, DecisionStatus.VIOLATED)
+
+        violated.acknowledgement = None
+        self.assertEqual(exit_code([violated]), 1)
+
+        violated.acknowledgement = {"accepted_on": "2026-09-19", "owner": "me"}
+        self.assertEqual(exit_code([violated]), 0)
 
 
 if __name__ == "__main__":

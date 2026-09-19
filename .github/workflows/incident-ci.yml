@@ -11,6 +11,13 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # The project lives in a subdirectory while the workflows have to sit at the
+    # repository root -- GitHub only discovers .github/workflows there. Every
+    # `run` step below is relative to the project, not the repo root.
+    defaults:
+      run:
+        working-directory: incident-bridge
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,4 +34,4 @@ jobs:
       - name: Check architecture decisions
         env:
           PYTHONPATH: .
-        run: python -m decision_monitor.cli repo --root . || true
+        run: python -m decision_monitor.cli repo --root .

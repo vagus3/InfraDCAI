@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import DecisionStatus, Evidence, Result
-from .terraform_scan import scan_securestring_sources
+from .terraform_scan import scan_securestring_parameters
 
 
 OPS = {
@@ -87,13 +87,19 @@ def _evaluate_metric(decision: dict[str, Any], snapshot: dict[str, Any]) -> Resu
 
 def _evaluate_terraform_secret(decision: dict[str, Any], repo_root: Path) -> Result:
     scan_root = repo_root / decision["rule"].get("path", ".")
-    findings = scan_securestring_sources(scan_root)
+    findings = scan_securestring_parameters(scan_root)
+    generated = [f for f in findings if f["kind"] == "generated_secret"]
+
     status = DecisionStatus.VIOLATED if findings else DecisionStatus.VALID
-    summary = (
-        f"Found {len(findings)} SecureString resource(s) whose secret material flows through Terraform."
-        if findings
-        else "No generated secret material flows into SecureString values through Terraform."
-    )
+    if findings:
+        summary = (
+            f"Terraform manages {len(findings)} SecureString parameter(s); "
+            f"{len(generated)} of them generate the secret themselves. "
+            "Provider refresh writes the decrypted value into state in both cases."
+        )
+    else:
+        summary = "Terraform does not manage the value of any SecureString parameter."
+
     return Result(
         decision_id=decision["id"],
         title=decision["title"],
@@ -101,6 +107,7 @@ def _evaluate_terraform_secret(decision: dict[str, Any], repo_root: Path) -> Res
         statement=decision["statement"],
         reason=decision["reason"],
         evidence=[Evidence(source="terraform.source", summary=summary, details={"findings": findings})],
+        acknowledgement=decision.get("acknowledgement"),
     )
 
 
@@ -111,7 +118,7 @@ def evaluate(decisions: list[dict[str, Any]], snapshot: dict[str, Any], repo_roo
         trigger_type = decision.get("revisit_trigger", {}).get("type")
         if rule_type == "no_public_ingress":
             results.append(_evaluate_public_ingress(decision, snapshot))
-        elif rule_type == "terraform_securestring_no_generated_secret":
+        elif rule_type == "terraform_securestring_ownership":
             results.append(_evaluate_terraform_secret(decision, repo_root))
         elif trigger_type == "metric_threshold":
             results.append(_evaluate_metric(decision, snapshot))

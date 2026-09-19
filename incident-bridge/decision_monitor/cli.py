@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .engine import evaluate
+from .models import DecisionStatus
 from .report import print_results
 
 
@@ -50,7 +51,7 @@ def main() -> None:
         repo_decisions = [
             d
             for d in decisions
-            if d.get("rule", {}).get("type") == "terraform_securestring_no_generated_secret"
+            if d.get("rule", {}).get("type") == "terraform_securestring_ownership"
         ]
         results = evaluate(repo_decisions, snapshot, args.root.resolve())
     elif args.command == "snapshot":
@@ -63,6 +64,24 @@ def main() -> None:
         results = evaluate(decisions, snapshot, args.root.resolve())
 
     print_results(results)
+    raise SystemExit(exit_code(results))
+
+
+def exit_code(results: list) -> int:
+    """Non-zero when a violation has nobody's name on it.
+
+    Reporting a violation and then exiting 0 is how a checker becomes
+    decoration: CI stays green, the finding scrolls past, and the tool has
+    taught everyone to ignore it. An acknowledged violation is different --
+    somebody wrote down that they are shipping with it and when they will
+    revisit -- so it prints loudly but does not block.
+    """
+    blocking = [
+        r
+        for r in results
+        if r.status == DecisionStatus.VIOLATED and not getattr(r, "acknowledgement", None)
+    ]
+    return 1 if blocking else 0
 
 
 if __name__ == "__main__":

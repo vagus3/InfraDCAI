@@ -25,3 +25,8 @@ class Result:
     statement: str
     reason: str
     evidence: list[Evidence] = field(default_factory=list)
+    # Set when a decision carries a written, dated acknowledgement of a known
+    # violation. The status stays VIOLATED -- this only records that someone
+    # decided to ship with it, so CI can gate on unacknowledged findings while
+    # the acknowledged one stays visible instead of being silently downgraded.
+    acknowledgement: dict[str, Any] | None = None
