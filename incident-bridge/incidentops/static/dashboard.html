@@ -39,10 +39,11 @@
 
   <div class="card" style="margin-bottom:24px">
     <h2>Demo</h2>
-    <p class="sub">모니터링이 먼저 잡는 경우와 고객 문의가 먼저 들어오는 경우를 재현합니다.</p>
-    <button onclick="demoMonitor()">A. 5xx 알람</button>
-    <button onclick="demoCustomer()">B. 고객 지연 문의</button>
-    <button class="secondary" onclick="refresh()">새로고침</button>
+    <p class="sub">모니터링이 먼저 잡는 경우와 고객 문의가 먼저 들어오는 경우를 재현합니다.
+      Verify 버튼은 실제 CI/배포/서비스 확인 없이 세 값을 고정된 true로 보내는 데모용입니다.</p>
+    <button type="button" id="demoMonitorBtn">A. 5xx 알람</button>
+    <button type="button" id="demoCustomerBtn">B. 고객 지연 문의</button>
+    <button type="button" class="secondary" id="refreshBtn">새로고침</button>
     <div id="log">Ready.</div>
   </div>
 
@@ -56,50 +57,155 @@
 </main>
 <script>
 const api = '/api/v1';
-const out = (value) => document.getElementById('log').textContent = typeof value === 'string' ? value : JSON.stringify(value,null,2);
-async function jfetch(url, opts={}) {
-  const response = await fetch(url,{headers:{'Content-Type':'application/json'},...opts});
+const out = (value) => {
+  document.getElementById('log').textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+};
+
+async function jfetch(url, opts = {}) {
+  const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
   const body = await response.json();
-  if(!response.ok) throw new Error(JSON.stringify(body));
+  if (!response.ok) throw new Error(JSON.stringify(body));
   return body;
 }
-async function refresh(){
-  const list = await jfetch(api+'/incidents');
-  openCount.textContent = list.filter(item=>item.status!=='RESOLVED').length;
-  resolvedCount.textContent = list.filter(item=>item.status==='RESOLVED').length;
-  gapCount.textContent = list.filter(item=>item.alert_gap).length;
-  rows.innerHTML = list.map(item=>`<tr>
-    <td><code>${item.id}</code></td>
-    <td>${item.tenant}<br><small>${item.trigger}</small></td>
-    <td>${item.title}${item.alert_gap?`<br><small>Gap: ${item.alert_gap}</small>`:''}</td>
-    <td class="status ${item.status}">${item.status}</td>
-    <td>
-      <button class="secondary" onclick="triage('${item.id}')">Triage</button>
-      <button class="secondary" onclick="makeFixTask('${item.id}')">Fix task</button>
-      <button class="secondary" onclick="verify('${item.id}')">Verify</button>
-    </td>
-  </tr>`).join('');
+
+function actionButton(label, handler) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'secondary';
+  button.textContent = label;
+  // A listener bound to a closure over item.id, not a string built from it --
+  // nothing here is assembled into an executable attribute.
+  button.addEventListener('click', handler);
+  return button;
 }
-async function demoMonitor(){
+
+function cellWithNote(mainText, noteText) {
+  const cell = document.createElement('td');
+  cell.appendChild(document.createTextNode(mainText));
+  if (noteText) {
+    cell.appendChild(document.createElement('br'));
+    const note = document.createElement('small');
+    note.textContent = noteText;
+    cell.appendChild(note);
+  }
+  return cell;
+}
+
+function renderRow(item) {
+  const tr = document.createElement('tr');
+
+  const idCell = document.createElement('td');
+  const code = document.createElement('code');
+  code.textContent = item.id;
+  idCell.appendChild(code);
+  tr.appendChild(idCell);
+
+  // tenant is attacker-controlled: any caller of /api/v1/signals/telemetry or
+  // /api/v1/customer-email sets it directly. textContent (via cellWithNote)
+  // keeps it inert instead of interpreting it as markup, which innerHTML did.
+  tr.appendChild(cellWithNote(item.tenant, item.trigger));
+  tr.appendChild(cellWithNote(item.title, item.alert_gap ? `Gap: ${item.alert_gap}` : null));
+
+  const statusCell = document.createElement('td');
+  statusCell.className = `status ${item.status}`;
+  statusCell.textContent = item.status;
+  tr.appendChild(statusCell);
+
+  const actionCell = document.createElement('td');
+  actionCell.appendChild(actionButton('Triage', () => triage(item.id)));
+  actionCell.appendChild(actionButton('Fix task', () => makeFixTask(item.id)));
+  actionCell.appendChild(actionButton('Verify (demo)', () => verify(item.id)));
+  tr.appendChild(actionCell);
+
+  return tr;
+}
+
+async function refresh() {
+  const list = await jfetch(api + '/incidents');
+  openCount.textContent = list.filter((item) => item.status !== 'RESOLVED').length;
+  resolvedCount.textContent = list.filter((item) => item.status === 'RESOLVED').length;
+  gapCount.textContent = list.filter((item) => item.alert_gap).length;
+
+  rows.textContent = '';
+  for (const item of list) rows.appendChild(renderRow(item));
+}
+
+async function demoMonitor() {
   const observedAt = new Date().toISOString();
-  const opened = await jfetch(api+'/signals/telemetry',{method:'POST',body:JSON.stringify({tenant:'company-a',metric:'5xx_rate',value:.31,unit:'ratio',endpoint:'/chat',deployment_sha:'bad-v19',labels:{previous_sha:'good-v18'},observed_at:observedAt})});
+  const opened = await jfetch(api + '/signals/telemetry', {
+    method: 'POST',
+    body: JSON.stringify({
+      tenant: 'company-a', metric: '5xx_rate', value: 0.31, unit: 'ratio', endpoint: '/chat',
+      deployment_sha: 'bad-v19', labels: { previous_sha: 'good-v18' }, observed_at: observedAt,
+    }),
+  });
   const id = opened.incident.id;
-  await jfetch(api+'/customer-email',{method:'POST',body:JSON.stringify({tenant:'company-a',customer:'Acme Ops',subject:'API 오류가 계속 발생합니다',body:'배포 이후 /chat 요청이 자주 실패합니다.'})});
-  out('Incident opened and customer email matched: '+id);
+  await jfetch(api + '/customer-email', {
+    method: 'POST',
+    body: JSON.stringify({
+      tenant: 'company-a', customer: 'Acme Ops', subject: 'API 오류가 계속 발생합니다',
+      body: '배포 이후 /chat 요청이 자주 실패합니다.',
+    }),
+  });
+  out('Incident opened and customer email matched: ' + id);
   await refresh();
 }
-async function demoCustomer(){
-  await jfetch(api+'/signals/telemetry',{method:'POST',body:JSON.stringify({tenant:'company-b',metric:'p95_latency',value:3.7,baseline:1.1,unit:'seconds',endpoint:'/chat'})});
-  const result = await jfetch(api+'/customer-email',{method:'POST',body:JSON.stringify({tenant:'company-b',customer:'Beta Support',subject:'응답 속도가 어제부터 너무 느립니다',body:'평소 1초 정도였는데 지금은 3~4초씩 걸립니다.'})});
+
+async function demoCustomer() {
+  await jfetch(api + '/signals/telemetry', {
+    method: 'POST',
+    body: JSON.stringify({
+      tenant: 'company-b', metric: 'p95_latency', value: 3.7, baseline: 1.1, unit: 'seconds', endpoint: '/chat',
+    }),
+  });
+  const result = await jfetch(api + '/customer-email', {
+    method: 'POST',
+    body: JSON.stringify({
+      tenant: 'company-b', customer: 'Beta Support', subject: '응답 속도가 어제부터 너무 느립니다',
+      body: '평소 1초 정도였는데 지금은 3~4초씩 걸립니다.',
+    }),
+  });
   out(result.incident);
   await refresh();
 }
-async function triage(id){ out(await jfetch(`${api}/incidents/${id}/triage`,{method:'POST'})); await refresh(); }
-async function makeFixTask(id){ try{out(await jfetch(`${api}/incidents/${id}/fix-task`,{method:'POST'}));}catch(error){out(String(error));} await refresh(); }
-async function verify(id){
-  out(await jfetch(`${api}/incidents/${id}/verify`,{method:'POST',body:JSON.stringify({ci_passed:true,deploy_succeeded:true,production_healthy:true,notes:'Demo: service metrics returned to the normal range.'})}));
+
+async function triage(id) {
+  out(await jfetch(`${api}/incidents/${id}/triage`, { method: 'POST' }));
   await refresh();
 }
+
+async function makeFixTask(id) {
+  try {
+    out(await jfetch(`${api}/incidents/${id}/fix-task`, { method: 'POST' }));
+  } catch (error) {
+    out(String(error));
+  }
+  await refresh();
+}
+
+async function verify(id) {
+  // Synthetic: this demo sends fixed ci_passed/deploy_succeeded/production_healthy
+  // values rather than a real CI/deploy/service check. See DESIGN.md #4 for what
+  // an evidence-backed verification would actually require.
+  try {
+    const result = await jfetch(`${api}/incidents/${id}/verify`, {
+      method: 'POST',
+      body: JSON.stringify({
+        ci_passed: true, deploy_succeeded: true, production_healthy: true,
+        notes: 'Demo: fixed values, not a real CI/deploy/service check.',
+      }),
+    });
+    out(result);
+  } catch (error) {
+    out(String(error));
+  }
+  await refresh();
+}
+
+document.getElementById('demoMonitorBtn').addEventListener('click', () => demoMonitor().catch((e) => out(String(e))));
+document.getElementById('demoCustomerBtn').addEventListener('click', () => demoCustomer().catch((e) => out(String(e))));
+document.getElementById('refreshBtn').addEventListener('click', () => refresh().catch((e) => out(String(e))));
+
 refresh();
 </script>
 </body>

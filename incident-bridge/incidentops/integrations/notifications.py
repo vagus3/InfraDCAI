@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import smtplib
 from email.message import EmailMessage
 
 import httpx
 
 from incidentops.config import settings
+from incidentops.external import external_incident_summary
 from incidentops.models import Incident
 
 
@@ -14,7 +16,7 @@ async def send_notification(incident: Incident, message: str) -> str:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
                 settings.notify_webhook_url,
-                json={"incident": incident.model_dump(mode="json"), "message": message},
+                json={"incident": external_incident_summary(incident), "message": message},
             )
             response.raise_for_status()
         return "webhook"
@@ -26,12 +28,20 @@ async def send_notification(incident: Incident, message: str) -> str:
         email["To"] = settings.smtp_to
         email.set_content(message)
 
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
-            if settings.smtp_starttls:
-                smtp.starttls()
-            if settings.smtp_username and settings.smtp_password:
-                smtp.login(settings.smtp_username, settings.smtp_password)
-            smtp.send_message(email)
+        # smtplib is synchronous; calling it directly here would block the
+        # event loop for the length of the SMTP conversation (connect,
+        # STARTTLS, auth, send) while every other request this process is
+        # serving waits. to_thread moves it off the loop.
+        await asyncio.to_thread(_send_smtp, email)
         return "smtp"
 
     return "preview"
+
+
+def _send_smtp(email: EmailMessage) -> None:
+    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
+        if settings.smtp_starttls:
+            smtp.starttls()
+        if settings.smtp_username and settings.smtp_password:
+            smtp.login(settings.smtp_username, settings.smtp_password)
+        smtp.send_message(email)

@@ -5,6 +5,7 @@ from pathlib import Path
 import httpx
 
 from incidentops.config import settings
+from incidentops.external import external_incident_summary
 from incidentops.models import Incident
 
 
@@ -13,7 +14,7 @@ async def dispatch_fix(incident: Incident, task_path: Path) -> dict:
     request_body = {
         "event": "incident.fix_requested",
         "incident_id": incident.id,
-        "incident": incident.model_dump(mode="json"),
+        "incident": external_incident_summary(incident),
         "task": task_text,
     }
     if not settings.fix_webhook_url:
