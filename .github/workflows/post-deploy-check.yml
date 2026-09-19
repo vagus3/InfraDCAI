@@ -16,6 +16,13 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+
+    # The project lives in a subdirectory while the workflows have to sit at the
+    # repository root -- GitHub only discovers .github/workflows there. Every
+    # `run` step below is relative to the project, not the repo root.
+    defaults:
+      run:
+        working-directory: incident-bridge
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,4 +54,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: post-deploy-${{ inputs.incident_id }}
-          path: verification.json
+          # `uses` steps ignore working-directory, so this path is repo-relative.
+          path: incident-bridge/verification.json
