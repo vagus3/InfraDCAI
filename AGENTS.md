@@ -18,9 +18,14 @@ git 루트는 `InfraDCAI`이고 프로젝트는 `incident-bridge/` 하위에 있
 
 가상환경은 `incident-bridge/.venv`에 있다. 모든 명령은 `incident-bridge/`에서 실행한다.
 
+Python은 3.11을 쓴다. 3.13 이상에서는 `asyncpg` 휠 빌드가 실패한다. 검증된 조합은 3.11.15다.
+
+`requirements.txt`(앱)와 `incidentops/requirements.txt`(운영 도구)는 별개다. 테스트만 돌린다면
+후자로 충분하지만, 앱을 기동하려면 둘 다 필요하다.
+
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r incidentops/requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt -r incidentops/requirements.txt
 
 PYTHONPATH=. .venv/bin/python -m pytest -q incidentops/tests decision_monitor/tests
 PYTHONPATH=. .venv/bin/python -m incidentops.demo all
@@ -45,6 +50,9 @@ PYTHONPATH=. .venv/bin/python -m uvicorn incidentops.api:app --port 8090
 - `app/routers/chat.py`는 upstream 오류를 HTTP 200 스트림 안의 error 이벤트로 내보낸다.
   그래서 5xx 비율과 `/ready`만 보면 이 실패가 보이지 않는다. 이 프로젝트의 대표 실험이 바로
   이 실패를 관측 가능하게 만드는 것이다.
+- `app/` 에는 테스트가 없다. `pytest`가 통과해도 앱이 기동한다는 뜻이 아니다. requirements의
+  핀 문제로 회원가입이 전부 500을 반환하던 동안에도 테스트는 전부 통과했다. 기록은
+  `docs/experiments/2026-09-19-streaming-failure.md`에 있다.
 - `user-data.sh.tftpl`은 `set -euxo pipefail` 상태다. 여기서 시크릿을 다루는 명령은 추적에
   그대로 찍히고, 그 출력은 `aws ec2 get-console-output`으로 읽힌다. `deploy.sh`가 `-x`를 빼둔
   이유가 이것이다.
