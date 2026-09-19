@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 
 from app.auth import get_current_user
 from app.config import settings
-from app.llm import stream_llm_response
+from app.llm import UpstreamIncompleteError, stream_llm_response
 from app.logging_config import log_event
 from app.models import User
 from app.redis_client import get_redis
@@ -75,6 +75,21 @@ async def chat_stream(req: ChatRequest, current_user: User = Depends(get_current
         except httpx.RequestError:
             log_event(logger, logging.ERROR, "llm_unreachable", provider=settings.llm_provider)
             yield f"data: {json.dumps({'error': 'Could not reach the model.'})}\n\n"
+            return
+        except UpstreamIncompleteError:
+            # The connection ended without the provider's own completion
+            # signal -- a dropped connection or an early close, not a clean
+            # finish. Without this, the loop above would have simply stopped
+            # and the code below would persist reply_chars as if it were the
+            # whole answer.
+            log_event(
+                logger,
+                logging.ERROR,
+                "llm_incomplete_stream",
+                provider=settings.llm_provider,
+                reply_chars=len(full_reply),
+            )
+            yield f"data: {json.dumps({'error': 'The response was cut off before it finished.'})}\n\n"
             return
 
         # Only persist once a full reply came back, so a failed turn does not
