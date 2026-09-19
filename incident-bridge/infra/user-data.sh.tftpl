@@ -45,13 +45,54 @@ cd /opt/app
 # ---------------------------------------------------------------------------
 PLACEHOLDER="set-me-with-the-aws-cli"
 
-# TODO(you): read the current parameter value into a shell variable, and if it
-# still equals $${PLACEHOLDER}, generate a random password and store it:
-#
-#   aws ssm put-parameter --name ${ssm_prefix}/postgres_password \
-#     --type SecureString --overwrite --region ${aws_region} --value "$${PW}"
-#
-# Roughly 8 lines. Mind the three points above.
+# Tracing off for the whole block. Everything user-data echoes lands in
+# /var/log/cloud-init-output.log and in the EC2 console log, which
+# `aws ec2 get-console-output` hands to anyone holding that permission.
+set +x
+
+# `|| echo` keeps set -e from killing the boot on a read failure, and marks the
+# failure with a value no real parameter can hold.
+current="$(aws ssm get-parameter \
+  --name ${ssm_prefix}/postgres_password \
+  --with-decryption --region ${aws_region} \
+  --query Parameter.Value --output text 2>/dev/null || echo "__unreadable__")"
+
+if [ "$${current}" = "__unreadable__" ]; then
+  # Fail closed. Terraform creates this parameter, so an unreadable one means
+  # the IAM policy, the region or the parameter itself is wrong. Generating a
+  # password in that state would either be thrown away or overwrite one a
+  # database is already using. Stopping here leaves a boot that visibly failed;
+  # continuing would leave a database nobody can reach and no clue why.
+  set -x
+  echo "FATAL: ${ssm_prefix}/postgres_password could not be read. Not guessing."
+  exit 1
+fi
+
+if [ "$${current}" = "$${PLACEHOLDER}" ]; then
+  # Only ever written while the stored value is still the placeholder. Postgres
+  # bakes POSTGRES_PASSWORD in during initdb and ignores it afterwards, so
+  # overwriting a live password desyncs .env from the database for good.
+  #
+  # Known limitation: --value puts the secret on a command line, so it is
+  # visible to `ps` on this host for the life of the call. Single instance,
+  # single boot, no other users -- accepted rather than unnoticed. The stricter
+  # form feeds it through --cli-input-json from a 0600 file.
+  #
+  # Also not concurrency-safe: this reads then overwrites. Fine for one
+  # instance booting once; a second writer would need a create-only call and a
+  # re-read of whoever won.
+  aws ssm put-parameter \
+    --name ${ssm_prefix}/postgres_password \
+    --type SecureString --overwrite --region ${aws_region} \
+    --value "$(openssl rand -hex 32)" > /dev/null
+  bootstrap_result="generated"
+else
+  bootstrap_result="already set, left alone"
+fi
+
+unset current
+set -x
+echo "postgres_password bootstrap: $${bootstrap_result}"
 
 
 # ---------------------------------------------------------------------------
