@@ -22,6 +22,10 @@ class Settings(BaseSettings):
 
     latency_alert_seconds: float = 5.0
     error_rate_alert_ratio: float = 0.05
+    # A second, higher threshold on the same metric: above this the incident
+    # opens as SEV2 instead of SEV3. Named and documented here instead of a
+    # bare 0.2 inline, per CODE_RULES.md's "하드코딩을 분류해서 다룬다".
+    error_rate_sev2_ratio: float = 0.2
     relative_latency_regression_ratio: float = 1.5
     correlation_window_minutes: int = 30
 

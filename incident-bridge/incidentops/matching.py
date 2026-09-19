@@ -20,18 +20,39 @@ def _incident_id() -> str:
     return f"INC-{uuid.uuid4().hex[:8].upper()}"
 
 
+# Single source of truth for metric spelling variants. _alert_reason and
+# _find_subthreshold_regression both need it; keeping one list here means they
+# cannot drift into recognizing different aliases for the same metric.
+_METRIC_ALIASES = {
+    "5xx_rate": "5xx_rate",
+    "error_rate": "5xx_rate",
+    "p95_latency": "p95_latency",
+    "latency_p95": "p95_latency",
+    "readiness": "readiness",
+    "ready": "readiness",
+}
+
+
+def _normalize_metric(name: str) -> str:
+    return _METRIC_ALIASES.get(name.lower(), name.lower())
+
+
 def _alert_reason(signal: TelemetrySignal) -> str | None:
-    metric = signal.metric.lower()
-    if metric in {"5xx_rate", "error_rate"} and signal.value >= settings.error_rate_alert_ratio:
+    metric = _normalize_metric(signal.metric)
+    if metric == "5xx_rate" and signal.value >= settings.error_rate_alert_ratio:
         return f"error rate {signal.value:.1%} exceeded {settings.error_rate_alert_ratio:.1%}"
-    if metric in {"p95_latency", "latency_p95"} and signal.value >= settings.latency_alert_seconds:
+    if metric == "p95_latency" and signal.value >= settings.latency_alert_seconds:
         return f"p95 latency {signal.value:.2f}s exceeded {settings.latency_alert_seconds:.2f}s"
-    if metric in {"readiness", "ready"} and signal.value <= 0:
+    if metric == "readiness" and signal.value <= 0:
         return "readiness failed"
     return None
 
 
 def _customer_symptom(email: CustomerEmail) -> str:
+    """Keyword-based label used only as a secondary hint for routing and
+    display (e.g. gating the sub-threshold regression check). It is not
+    treated as a confirmed cause anywhere -- see triage.py, which prefers
+    structured fields (deployment_sha, dependency) when they exist."""
     text = f"{email.subject} {email.body}".lower()
     if any(word in text for word in ["느리", "느립", "느려", "slow", "latency", "지연"]):
         return "performance degradation"
@@ -52,7 +73,7 @@ class IncidentMatcher:
         if not reason:
             return None
 
-        current = self._latest_open_incident(signal.tenant)
+        current = self._latest_open_incident(signal.tenant, signal.observed_at)
         fact = IncidentFact(
             source=SignalSource.TELEMETRY,
             kind="alert",
@@ -68,7 +89,8 @@ class IncidentMatcher:
 
         severity = (
             Severity.SEV2
-            if signal.metric.lower() in {"5xx_rate", "error_rate"} and signal.value >= 0.2
+            if _normalize_metric(signal.metric) == "5xx_rate"
+            and signal.value >= settings.error_rate_sev2_ratio
             else Severity.SEV3
         )
         incident = Incident(
@@ -87,10 +109,26 @@ class IncidentMatcher:
         return incident
 
     def add_customer_email(self, email: CustomerEmail) -> Incident:
-        self.store.add_customer_email(email)
+        is_new_event = self.store.add_customer_email(email)
+
+        if not is_new_event and email.message_id:
+            # A resend of an event we already recorded, identified by
+            # (tenant, message_id). Return the incident it already joined
+            # rather than appending a second copy of the same report.
+            linked_id = self.store.customer_email_incident(email.tenant, email.message_id)
+            if linked_id:
+                existing = self.store.get_incident(linked_id)
+                if existing:
+                    return existing
+            # The email row exists but no incident was linked yet (e.g. an
+            # earlier attempt failed between the two writes). Fall through and
+            # process it as new rather than silently dropping the report.
+
         symptom = _customer_symptom(email)
-        recent_signals = self.store.recent_telemetry(email.tenant, settings.correlation_window_minutes)
-        current = self._latest_open_incident(email.tenant)
+        recent_signals = self.store.recent_telemetry(
+            email.tenant, settings.correlation_window_minutes, now=email.received_at
+        )
+        current = self._latest_open_incident(email.tenant, email.received_at)
 
         customer_report = IncidentFact(
             source=SignalSource.CUSTOMER_EMAIL,
@@ -107,6 +145,7 @@ class IncidentMatcher:
             )
             current.updated_at = email.received_at
             self.store.save_incident(current)
+            self.store.link_customer_email_incident(email.tenant, email.message_id, current.id)
             return current
 
         related_facts, alert_gap = self._find_subthreshold_regression(recent_signals, symptom)
@@ -124,11 +163,16 @@ class IncidentMatcher:
             alert_gap=alert_gap,
         )
         self.store.save_incident(incident)
+        self.store.link_customer_email_incident(email.tenant, email.message_id, incident.id)
         return incident
 
-    def _latest_open_incident(self, tenant: str) -> Incident | None:
-        incidents = self.store.open_incidents(tenant)
-        return incidents[0] if incidents else None
+    def _latest_open_incident(self, tenant: str, at: datetime) -> Incident | None:
+        """Open incident for `tenant` still within the correlation window of
+        `at`. Bounding by time (pushed into SQL -- see IncidentStore) is what
+        stops a days-old incident from silently absorbing an unrelated new
+        signal, and what lets an ESCALATED incident eventually stop collecting
+        once nothing has touched it inside the window."""
+        return self.store.latest_open_incident(tenant, at, settings.correlation_window_minutes)
 
     def _find_subthreshold_regression(
         self, signals: list[TelemetrySignal], symptom: str
@@ -141,10 +185,12 @@ class IncidentMatcher:
         candidates = [
             signal
             for signal in signals
-            if signal.metric.lower() in {"p95_latency", "latency_p95"} and signal.baseline
+            if _normalize_metric(signal.metric) == "p95_latency"
+            and signal.baseline is not None
+            and signal.baseline > 0
         ]
         for signal in candidates:
-            ratio = signal.value / signal.baseline if signal.baseline else 0
+            ratio = signal.value / signal.baseline
             if ratio >= settings.relative_latency_regression_ratio and signal.value < settings.latency_alert_seconds:
                 summary = f"latency rose {ratio:.1f}x from baseline without crossing the alert threshold"
                 related_facts.append(
