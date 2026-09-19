@@ -77,10 +77,11 @@ p95 increased from 1.10s to 3.70s (3.4x).
 
 ## 실행
 
-Python 3.11 이상을 권장합니다.
+검증한 로컬 환경은 Python 3.11.15입니다. 아래 설치는 운영 도구용이며, 감시 대상 채팅 앱을
+기동하려면 별도로 `requirements.txt`의 의존성도 필요합니다.
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r incidentops/requirements.txt
 export PYTHONPATH=.
@@ -173,3 +174,7 @@ decision_monitor/      # DECISIONS.md와 실제 코드/인프라 확인
 - 고객에게 보내는 메일은 기본적으로 draft 생성까지만 하고 사람이 확인하는 흐름을 권장합니다.
 
 자세한 내용은 [`docs/architecture.md`](docs/architecture.md), 실제 데모 조건은 [`docs/scenarios.md`](docs/scenarios.md)를 참고하세요.
+
+학습 순서와 공식 참고 자료는 [`LEARNING.md`](LEARNING.md), 지켜야 할 규약과 미구현 범위는
+[`DESIGN.md`](DESIGN.md)에 있습니다. 에이전트 작업 지침은 저장소 루트의 [`AGENTS.md`](../AGENTS.md)에서 관리합니다.
+코드 작성·리뷰 기준과 아직 적용하지 않은 개선 후보는 [`CODE_RULES.md`](CODE_RULES.md)에 있습니다.

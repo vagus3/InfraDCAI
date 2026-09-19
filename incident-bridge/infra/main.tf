@@ -110,9 +110,9 @@ resource "aws_security_group" "app" {
 # ---------------------------------------------------------------------------
 # Secrets
 #
-# Terraform creates the parameters but never holds the real values: anything
-# passed through Terraform lands in the state file in plaintext. Real values
-# are set once with the AWS CLI (see README) and ignored on later applies.
+# Terraform creates placeholders. ignore_changes prevents overwriting external
+# values, but provider refresh still stores them in state. This is the accepted,
+# unresolved ADR-010 violation documented in DECISIONS.md.
 # ---------------------------------------------------------------------------
 
 locals {
@@ -230,6 +230,18 @@ locals {
 }
 
 resource "aws_instance" "app" {
+  # user-data reads/writes SSM at boot. The prefix string and instance profile
+  # do not express these dependencies on the parameters and policy attachments.
+  depends_on = [
+    aws_ssm_parameter.postgres_password,
+    aws_ssm_parameter.jwt_secret_key,
+    aws_ssm_parameter.openai_api_key,
+    aws_iam_role_policy.read_secrets,
+    aws_iam_role_policy.bootstrap_postgres_password,
+    aws_iam_role_policy_attachment.ssm_core,
+    aws_iam_role_policy_attachment.ecr_read,
+  ]
+
   ami                    = data.aws_ssm_parameter.al2023.value
   instance_type          = var.instance_type
   subnet_id              = data.aws_subnets.default.ids[0]

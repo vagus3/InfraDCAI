@@ -27,7 +27,10 @@ python -m decision_monitor.cli snapshot decision_monitor/examples/compliant.json
 python -m decision_monitor.cli snapshot decision_monitor/examples/violated-and-stale.json --root .
 ```
 
-현재 저장소를 검사하면 ADR-010을 확인할 수 있습니다. PostgreSQL password를 `random_password`에서 만들고 `aws_ssm_parameter`의 값으로 넘기고 있기 때문에 실제 secret 값이 Terraform state를 거치게 됩니다.
+현재 저장소의 일반 `value` 기반 SecureString 파라미터 3개가 ADR-010 위반입니다.
+`random_password`는 제거됐지만 provider refresh가 복호화한 값을 state에 저장하는 문제는 남습니다.
+검사 결과는 `VIOLATED`이며, 기한과 findings 지문이 일치하는 승인 기록이 있어 현재는 exit 0입니다.
+승인이 만료되거나 findings가 바뀌면 실패합니다. 통과를 위해 승인 기한·지문을 임의로 갱신하지 않습니다.
 
 이 사례는 [`notes/terraform-secret-state.md`](notes/terraform-secret-state.md)에 정리했습니다.
 

@@ -20,8 +20,8 @@ cd /opt/app
 # ---------------------------------------------------------------------------
 # Database password bootstrap
 #
-# ADR-010 says Terraform creates the SSM parameter but never generates or holds
-# the value, so it arrives here as a literal placeholder. This is where the real
+# Terraform initially creates a placeholder; provider refresh can still put the
+# real value in state (the acknowledged ADR-010 violation). This is where the real
 # value has to appear -- and it has to appear *now*, before deploy.sh ever runs
 # docker compose up. Postgres writes POSTGRES_PASSWORD into its volume during
 # initdb and ignores the variable on every start after that, so a password that
@@ -31,8 +31,7 @@ cd /opt/app
 # Three things this block has to get right:
 #
 #   1. Only write when the stored value is still the placeholder. Overwriting a
-#      password that a running database already baked in is unrecoverable
-#      without touching the volume.
+#      password requires coordinating a database role password change.
 #   2. `set -e` is active (line 5). If the parameter is missing, get-parameter
 #      exits non-zero and takes the whole boot down with it unless tolerated.
 #   3. `set -x` is active. Every command is echoed to
@@ -50,14 +49,11 @@ PLACEHOLDER="set-me-with-the-aws-cli"
 # `aws ec2 get-console-output` hands to anyone holding that permission.
 set +x
 
-# `|| echo` keeps set -e from killing the boot on a read failure, and marks the
-# failure with a value no real parameter can hold.
-current="$(aws ssm get-parameter \
+# Check the command's exit status, not a sentinel mixed into its stdout.
+if ! current="$(aws ssm get-parameter \
   --name ${ssm_prefix}/postgres_password \
   --with-decryption --region ${aws_region} \
-  --query Parameter.Value --output text 2>/dev/null || echo "__unreadable__")"
-
-if [ "$${current}" = "__unreadable__" ]; then
+  --query Parameter.Value --output text 2>/dev/null)"; then
   # Fail closed. Terraform creates this parameter, so an unreadable one means
   # the IAM policy, the region or the parameter itself is wrong. Generating a
   # password in that state would either be thrown away or overwrite one a
@@ -71,20 +67,22 @@ fi
 if [ "$${current}" = "$${PLACEHOLDER}" ]; then
   # Only ever written while the stored value is still the placeholder. Postgres
   # bakes POSTGRES_PASSWORD in during initdb and ignores it afterwards, so
-  # overwriting a live password desyncs .env from the database for good.
-  #
-  # Known limitation: --value puts the secret on a command line, so it is
-  # visible to `ps` on this host for the life of the call. Single instance,
-  # single boot, no other users -- accepted rather than unnoticed. The stricter
-  # form feeds it through --cli-input-json from a 0600 file.
+  # overwriting a live password desyncs .env from the database.
   #
   # Also not concurrency-safe: this reads then overwrites. Fine for one
   # instance booting once; a second writer would need a create-only call and a
   # re-read of whoever won.
-  aws ssm put-parameter \
-    --name ${ssm_prefix}/postgres_password \
-    --type SecureString --overwrite --region ${aws_region} \
-    --value "$(openssl rand -hex 32)" > /dev/null
+  (
+    umask 077
+    password_file="$(mktemp)"
+    trap 'rm -f "$password_file"' EXIT
+    # AWS CLI reads the file; process arguments contain only its path.
+    openssl rand -hex 32 | tr -d '\n' > "$password_file"
+    aws ssm put-parameter \
+      --name ${ssm_prefix}/postgres_password \
+      --type SecureString --overwrite --region ${aws_region} \
+      --value "file://$password_file" > /dev/null
+  )
   bootstrap_result="generated"
 else
   bootstrap_result="already set, left alone"
@@ -219,8 +217,8 @@ ssm_get() {
     --region ${aws_region} --query Parameter.Value --output text
 }
 
-# Secrets are pulled at deploy time and written with 600. They exist on disk
-# only as this file, never in the repository or the Terraform state.
+# Secrets are pulled at deploy time and written with 600. Terraform state can
+# also contain their values; see the acknowledged ADR-010 violation.
 umask 077
 {
   echo "APP_IMAGE=${ecr_repo_url}:$IMAGE_TAG"
