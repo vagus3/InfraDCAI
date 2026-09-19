@@ -1,0 +1,55 @@
+# Redis is a Deployment, not a StatefulSet -- deliberately.
+#
+# The chat history in Redis is a cache with a 24h TTL. If the pod is replaced
+# and the data is gone, users lose conversation context and nothing else.
+# That is the same reasoning as DECISIONS.md #3, applied to the storage layer:
+# match the guarantee to what the data actually needs.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: mini-chatgpt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args:
+            - redis-server
+            - --maxmemory
+            - 128mb
+            - --maxmemory-policy
+            - allkeys-lru
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 50m
+            limits:
+              memory: 192Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: mini-chatgpt
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379

@@ -1,0 +1,14 @@
+{
+  "security_groups": [
+    {
+      "id": "sg-demo",
+      "ingress": [
+        {"protocol": "tcp", "from_port": 22, "to_port": 22, "cidr": "0.0.0.0/0"},
+        {"protocol": "tcp", "from_port": 443, "to_port": 443, "cidr": "0.0.0.0/0"}
+      ]
+    }
+  ],
+  "metrics": {
+    "host.normalized_load_pct": 86.3
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "tenant": "company-b",
+  "customer": "Beta Support",
+  "subject": "응답 속도가 어제부터 너무 느립니다",
+  "body": "장애 메시지는 없지만 평소 1초 정도였던 응답이 3~4초씩 걸립니다."
+}

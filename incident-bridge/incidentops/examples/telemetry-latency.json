@@ -1,0 +1,8 @@
+{
+  "tenant": "company-b",
+  "metric": "p95_latency",
+  "value": 3.7,
+  "baseline": 1.1,
+  "unit": "seconds",
+  "endpoint": "/chat"
+}

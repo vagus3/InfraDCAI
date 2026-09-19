@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini ChatGPT Infra</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ground: #171c26;
+    --panel: #1f2530;
+    --panel-2: #252c39;
+    --line: #2f3949;
+    --text: #d8dee9;
+    --muted: #8792a6;
+    --steel: #7fb2d9;
+    --signal: #e8b84b;
+    --danger: #e07b67;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+  }
+
+  .shell {
+    width: 100%;
+    max-width: 860px;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+  }
+
+  /* ---- header ---- */
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 18px 22px 14px;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  .env {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 1px 6px;
+  }
+  .rid {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ---- signature: request pipeline ---- */
+  .pipeline {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    overflow-x: auto;
+  }
+  .hop {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+    flex: 0 0 auto;
+  }
+  .lamp {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--line);
+    border: 1px solid #3a465a;
+    transition: background 160ms ease, box-shadow 160ms ease;
+  }
+  .hop[data-state="active"] .lamp {
+    background: var(--signal);
+    box-shadow: 0 0 0 3px rgba(232, 184, 75, 0.16);
+  }
+  .hop[data-state="done"] .lamp { background: var(--steel); }
+  .hop[data-state="failed"] .lamp {
+    background: var(--danger);
+    box-shadow: 0 0 0 3px rgba(224, 123, 103, 0.16);
+  }
+  .hop-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .hop[data-state="active"] .hop-label { color: var(--signal); }
+  .hop[data-state="done"] .hop-label { color: var(--steel); }
+  .hop[data-state="failed"] .hop-label { color: var(--danger); }
+  .wire {
+    flex: 1 1 24px;
+    min-width: 24px;
+    height: 1px;
+    background: var(--line);
+    margin: 0 10px;
+    position: relative;
+    top: -8px;
+  }
+
+  /* ---- transcript ---- */
+  main {
+    flex: 1;
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    overflow-y: auto;
+  }
+  .turn { display: flex; flex-direction: column; gap: 5px; }
+  .who {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .turn.user .body { color: var(--steel); }
+  .body { white-space: pre-wrap; word-break: break-word; }
+  .body.err { color: var(--danger); }
+  .streaming .body::after {
+    content: "▌";
+    color: var(--signal);
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .empty {
+    color: var(--muted);
+    font-size: 14px;
+    border: 1px dashed var(--line);
+    border-radius: 4px;
+    padding: 18px;
+    text-align: center;
+  }
+
+  /* ---- forms ---- */
+  .auth {
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-width: 380px;
+  }
+  .auth h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .auth p { margin: 0; color: var(--muted); font-size: 13px; }
+  input, textarea {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    padding: 9px 11px;
+    width: 100%;
+  }
+  textarea { resize: none; font-family: var(--sans); }
+  input:focus-visible, textarea:focus-visible, button:focus-visible {
+    outline: 2px solid var(--signal);
+    outline-offset: 1px;
+  }
+  .row { display: flex; gap: 8px; }
+  button {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 9px 14px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover:not(:disabled) { border-color: var(--steel); }
+  button.primary { background: var(--signal); border-color: var(--signal); color: #1a1204; }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .notice { font-size: 13px; color: var(--danger); min-height: 18px; }
+
+  /* ---- composer ---- */
+  .composer {
+    border-top: 1px solid var(--line);
+    padding: 14px 22px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    background: var(--panel);
+  }
+  .composer textarea { flex: 1; }
+  .bar {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    padding: 0 22px 14px;
+    background: var(--panel);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .bar button {
+    padding: 4px 9px;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+  .hidden { display: none !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  @media (max-width: 620px) {
+    .pipeline { padding: 14px; }
+    main, .composer, .auth { padding-left: 14px; padding-right: 14px; }
+    .bar { padding-left: 14px; padding-right: 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <header>
+    <h1>Mini ChatGPT Infra</h1>
+    <span class="env" id="env">checking…</span>
+    <span class="rid" id="rid"></span>
+  </header>
+
+  <div class="pipeline" id="pipeline">
+    <div class="hop" data-hop="auth" data-state="idle">
+      <span class="lamp"></span><span class="hop-label">auth</span>
+    </div>
+    <div class="wire"></div>
+    <div class="hop" data-hop="api" data-state="idle">
+      <span class="lamp"></span><span class="hop-label">fastapi</span>
+    </div>
+    <div class="wire"></div>
+    <div class="hop" data-hop="history" data-state="idle">
+      <span class="lamp"></span><span class="hop-label">redis</span>
+    </div>
+    <div class="wire"></div>
+    <div class="hop" data-hop="model" data-state="idle">
+      <span class="lamp"></span><span class="hop-label">model</span>
+    </div>
+  </div>
+
+  <!-- signed out -->
+  <div class="auth" id="authPanel">
+    <h2>Sign in to start</h2>
+    <p>New here? Enter an email and password and choose Create account.</p>
+    <input id="email" type="email" placeholder="you@example.com" autocomplete="username">
+    <input id="password" type="password" placeholder="password" autocomplete="current-password">
+    <div class="row">
+      <button class="primary" id="loginBtn">Sign in</button>
+      <button id="registerBtn">Create account</button>
+    </div>
+    <div class="notice" id="authNotice"></div>
+  </div>
+
+  <!-- signed in -->
+  <main id="transcript" class="hidden"></main>
+
+  <div class="bar hidden" id="bar">
+    <span id="who"></span>
+    <button id="clearBtn">Clear history</button>
+    <button id="logoutBtn">Sign out</button>
+  </div>
+
+  <div class="composer hidden" id="composer">
+    <textarea id="input" rows="2" placeholder="Ask something…"></textarea>
+    <button class="primary" id="sendBtn">Send</button>
+  </div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let token = sessionStorage.getItem("token") || null;
+let streaming = false;
+
+/* ---------- pipeline ---------- */
+function setHop(name, state) {
+  const el = document.querySelector(`.hop[data-hop="${name}"]`);
+  if (el) el.dataset.state = state;
+}
+function resetPipeline() {
+  ["auth", "api", "history", "model"].forEach((h) => setHop(h, "idle"));
+}
+
+/* ---------- session ---------- */
+function showSignedIn(email) {
+  $("authPanel").classList.add("hidden");
+  ["transcript", "bar", "composer"].forEach((id) => $(id).classList.remove("hidden"));
+  $("who").textContent = email ? `signed in as ${email}` : "signed in";
+  setHop("auth", "done");
+}
+function showSignedOut() {
+  token = null;
+  sessionStorage.removeItem("token");
+  sessionStorage.removeItem("email");
+  $("authPanel").classList.remove("hidden");
+  ["transcript", "bar", "composer"].forEach((id) => $(id).classList.add("hidden"));
+  resetPipeline();
+}
+
+/* ---------- transcript ---------- */
+function addTurn(role, text, isError) {
+  const empty = $("transcript").querySelector(".empty");
+  if (empty) empty.remove();
+
+  const turn = document.createElement("div");
+  turn.className = `turn ${role}`;
+  const who = document.createElement("div");
+  who.className = "who";
+  who.textContent = role === "user" ? "you" : "assistant";
+  const body = document.createElement("div");
+  body.className = isError ? "body err" : "body";
+  body.textContent = text;
+  turn.append(who, body);
+  $("transcript").append(turn);
+  $("transcript").scrollTop = $("transcript").scrollHeight;
+  return { turn, body };
+}
+function showEmpty() {
+  $("transcript").innerHTML = '<div class="empty">No messages yet. Redis is holding nothing for you.</div>';
+}
+
+/* ---------- auth actions ---------- */
+async function register() {
+  $("authNotice").textContent = "";
+  const res = await fetch("/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: $("email").value, password: $("password").value }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    $("authNotice").textContent = data.detail || "Could not create that account.";
+    return;
+  }
+  await login();
+}
+
+async function login() {
+  $("authNotice").textContent = "";
+  setHop("auth", "active");
+  const form = new URLSearchParams({ username: $("email").value, password: $("password").value });
+  const res = await fetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form,
+  });
+  if (!res.ok) {
+    setHop("auth", "failed");
+    $("authNotice").textContent = "Incorrect email or password.";
+    return;
+  }
+  const data = await res.json();
+  token = data.access_token;
+  sessionStorage.setItem("token", token);
+  sessionStorage.setItem("email", $("email").value);
+  showSignedIn($("email").value);
+  await loadHistory();
+}
+
+/* ---------- history ---------- */
+async function loadHistory() {
+  const res = await fetch("/chat/history", { headers: { Authorization: `Bearer ${token}` } });
+  if (res.status === 401) return showSignedOut();
+  const messages = await res.json();
+  $("transcript").innerHTML = "";
+  if (!messages.length) return showEmpty();
+  messages.forEach((m) => addTurn(m.role === "user" ? "user" : "assistant", m.content, false));
+  setHop("history", "done");
+}
+
+async function clearHistory() {
+  await fetch("/chat/history", { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+  $("transcript").innerHTML = "";
+  showEmpty();
+  setHop("history", "idle");
+}
+
+/* ---------- chat ---------- */
+async function send() {
+  const text = $("input").value.trim();
+  if (!text || streaming) return;
+
+  streaming = true;
+  $("sendBtn").disabled = true;
+  $("input").value = "";
+  resetPipeline();
+  setHop("auth", "done");
+  setHop("api", "active");
+
+  addTurn("user", text, false);
+  const { turn, body } = addTurn("assistant", "", false);
+  turn.classList.add("streaming");
+
+  try {
+    const res = await fetch("/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ message: text }),
+    });
+
+    const requestId = res.headers.get("X-Request-ID");
+    if (requestId) $("rid").textContent = `request ${requestId}`;
+
+    if (res.status === 401) { setHop("api", "failed"); return showSignedOut(); }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    setHop("api", "done");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop();
+
+      for (const frame of frames) {
+        const line = frame.trim();
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6);
+        if (payload === "[DONE]") { setHop("model", "done"); continue; }
+
+        let event;
+        try { event = JSON.parse(payload); } catch { continue; }
+
+        if (event.stage === "history_loaded") {
+          setHop("history", "done");
+          setHop("model", "active");
+        } else if (event.error) {
+          setHop("model", "failed");
+          body.classList.add("err");
+          body.textContent = event.error;
+        } else if (event.content) {
+          body.textContent += event.content;
+          $("transcript").scrollTop = $("transcript").scrollHeight;
+        }
+      }
+    }
+  } catch (err) {
+    setHop("model", "failed");
+    body.classList.add("err");
+    body.textContent = "The connection dropped before the answer finished.";
+  } finally {
+    turn.classList.remove("streaming");
+    streaming = false;
+    $("sendBtn").disabled = false;
+    $("input").focus();
+  }
+}
+
+/* ---------- wiring ---------- */
+$("loginBtn").onclick = login;
+$("registerBtn").onclick = register;
+$("sendBtn").onclick = send;
+$("clearBtn").onclick = clearHistory;
+$("logoutBtn").onclick = showSignedOut;
+
+$("password").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+
+/* environment badge doubles as a readiness check you can see */
+fetch("/ready")
+  .then((r) => r.json())
+  .then((d) => {
+    const failed = Object.entries(d.checks).filter(([, v]) => v !== "ok").map(([k]) => k);
+    $("env").textContent = failed.length ? `degraded: ${failed.join(", ")}` : "all dependencies ok";
+    if (failed.length) $("env").style.color = "var(--danger)";
+  })
+  .catch(() => { $("env").textContent = "unreachable"; });
+
+if (token) {
+  showSignedIn(sessionStorage.getItem("email"));
+  loadHistory();
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "tenant": "company-a",
+  "metric": "5xx_rate",
+  "value": 0.31,
+  "unit": "ratio",
+  "endpoint": "/chat",
+  "deployment_sha": "bad-v19",
+  "labels": {"previous_sha": "good-v18"}
+}

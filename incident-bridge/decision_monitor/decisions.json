@@ -1,0 +1,44 @@
+{
+  "decisions": [
+    {
+      "id": "ADR-001",
+      "title": "Use a single EC2 instance with Docker Compose",
+      "source": "DECISIONS.md#1-kubernetes를-쓰지-않았다",
+      "kind": "revisit",
+      "statement": "A single EC2 instance is sufficient while horizontal scaling is unnecessary.",
+      "revisit_trigger": {
+        "type": "metric_threshold",
+        "metric": "host.normalized_load_pct",
+        "operator": ">=",
+        "threshold": 70
+      },
+      "reason": "Sustained host pressure is evidence that the original 'one instance is enough' assumption deserves review. This is a review trigger, not an instruction to adopt Kubernetes."
+    },
+    {
+      "id": "ADR-008",
+      "title": "Use SSM Session Manager instead of SSH",
+      "source": "DECISIONS.md#8-ssh-대신-ssm-session-manager",
+      "kind": "invariant",
+      "statement": "Administrative access must not require public SSH ingress.",
+      "rule": {
+        "type": "no_public_ingress",
+        "protocol": "tcp",
+        "port": 22,
+        "cidrs": ["0.0.0.0/0", "::/0"]
+      },
+      "reason": "The workload deliberately uses SSM for administration, so opening SSH contradicts the accepted architecture decision."
+    },
+    {
+      "id": "ADR-010",
+      "title": "Do not put real secret material in Terraform state",
+      "source": "DECISIONS.md#10-시크릿은-terraform-state에-넣지-않았다",
+      "kind": "invariant",
+      "statement": "Terraform may create SecureString parameters, but must not generate or receive the real secret value.",
+      "rule": {
+        "type": "terraform_securestring_no_generated_secret",
+        "path": "infra"
+      },
+      "reason": "Values handled by Terraform are persisted in state even when the destination is SSM SecureString."
+    }
+  ]
+}

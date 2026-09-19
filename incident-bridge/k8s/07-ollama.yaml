@@ -1,0 +1,69 @@
+# Optional. Skip this if your machine is tight on memory -- set
+# LLM_PROVIDER=openai in the ConfigMap and add OPENAI_API_KEY to the Secret
+# instead. Everything else in the cluster works the same either way.
+#
+# Worth deploying at least once, because it is the first pod here that is
+# genuinely expensive. Watching the scheduler place a pod that requests 2Gi
+# is a better lesson in how scheduling works than reading about it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: mini-chatgpt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+          resources:
+            requests:
+              memory: 2Gi
+              cpu: 500m
+            limits:
+              memory: 4Gi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ollama-models
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+  namespace: mini-chatgpt
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: mini-chatgpt
+spec:
+  selector:
+    app: ollama
+  ports:
+    - port: 11434
+      targetPort: 11434

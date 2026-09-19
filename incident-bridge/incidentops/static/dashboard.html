@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Incident Bridge</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #e7edf6; background: #0b1020; }
+    body { margin: 0; background: linear-gradient(180deg,#0b1020,#11182a); min-height:100vh; }
+    main { max-width: 1120px; margin: 0 auto; padding: 32px 20px 80px; }
+    h1 { margin:0 0 6px; font-size:32px; }
+    .sub { color:#9eabc0; margin-bottom:28px; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; margin-bottom:24px; }
+    .card { background:#151e32; border:1px solid #263451; border-radius:14px; padding:18px; box-shadow:0 14px 38px rgba(0,0,0,.2); }
+    .metric { font-size:30px; font-weight:700; margin-top:6px; }
+    button { border:0; border-radius:9px; padding:10px 14px; font-weight:700; cursor:pointer; background:#e7edf6; color:#101827; margin:4px 6px 4px 0; }
+    button.secondary { background:#253451; color:#e7edf6; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { text-align:left; border-bottom:1px solid #263451; padding:12px 8px; vertical-align:top; }
+    th { color:#9eabc0; font-weight:600; }
+    .status { font-weight:800; }
+    .OPEN,.ESCALATED { color:#ff9d8f; }
+    .RESOLVED { color:#73dfb1; }
+    .TRIAGED,.READY_FOR_FIX,.FIX_IN_PROGRESS,.VERIFYING { color:#ffd27a; }
+    code { color:#b9c9ff; }
+    #log { white-space:pre-wrap; background:#080d18; border-radius:10px; padding:14px; min-height:76px; color:#b9c4d5; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Incident Bridge</h1>
+  <div class="sub">고객 문의와 서비스 지표를 같은 incident로 묶고, 수정 후 실제 서비스 상태까지 확인합니다.</div>
+
+  <div class="grid">
+    <div class="card"><div>Open incidents</div><div class="metric" id="openCount">0</div></div>
+    <div class="card"><div>Resolved</div><div class="metric" id="resolvedCount">0</div></div>
+    <div class="card"><div>Alert gaps</div><div class="metric" id="gapCount">0</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:24px">
+    <h2>Demo</h2>
+    <p class="sub">모니터링이 먼저 잡는 경우와 고객 문의가 먼저 들어오는 경우를 재현합니다.</p>
+    <button onclick="demoMonitor()">A. 5xx 알람</button>
+    <button onclick="demoCustomer()">B. 고객 지연 문의</button>
+    <button class="secondary" onclick="refresh()">새로고침</button>
+    <div id="log">Ready.</div>
+  </div>
+
+  <div class="card">
+    <h2>Incidents</h2>
+    <table>
+      <thead><tr><th>ID</th><th>Tenant / Source</th><th>Issue</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+</main>
+<script>
+const api = '/api/v1';
+const out = (value) => document.getElementById('log').textContent = typeof value === 'string' ? value : JSON.stringify(value,null,2);
+async function jfetch(url, opts={}) {
+  const response = await fetch(url,{headers:{'Content-Type':'application/json'},...opts});
+  const body = await response.json();
+  if(!response.ok) throw new Error(JSON.stringify(body));
+  return body;
+}
+async function refresh(){
+  const list = await jfetch(api+'/incidents');
+  openCount.textContent = list.filter(item=>item.status!=='RESOLVED').length;
+  resolvedCount.textContent = list.filter(item=>item.status==='RESOLVED').length;
+  gapCount.textContent = list.filter(item=>item.alert_gap).length;
+  rows.innerHTML = list.map(item=>`<tr>
+    <td><code>${item.id}</code></td>
+    <td>${item.tenant}<br><small>${item.trigger}</small></td>
+    <td>${item.title}${item.alert_gap?`<br><small>Gap: ${item.alert_gap}</small>`:''}</td>
+    <td class="status ${item.status}">${item.status}</td>
+    <td>
+      <button class="secondary" onclick="triage('${item.id}')">Triage</button>
+      <button class="secondary" onclick="makeFixTask('${item.id}')">Fix task</button>
+      <button class="secondary" onclick="verify('${item.id}')">Verify</button>
+    </td>
+  </tr>`).join('');
+}
+async function demoMonitor(){
+  const observedAt = new Date().toISOString();
+  const opened = await jfetch(api+'/signals/telemetry',{method:'POST',body:JSON.stringify({tenant:'company-a',metric:'5xx_rate',value:.31,unit:'ratio',endpoint:'/chat',deployment_sha:'bad-v19',labels:{previous_sha:'good-v18'},observed_at:observedAt})});
+  const id = opened.incident.id;
+  await jfetch(api+'/customer-email',{method:'POST',body:JSON.stringify({tenant:'company-a',customer:'Acme Ops',subject:'API 오류가 계속 발생합니다',body:'배포 이후 /chat 요청이 자주 실패합니다.'})});
+  out('Incident opened and customer email matched: '+id);
+  await refresh();
+}
+async function demoCustomer(){
+  await jfetch(api+'/signals/telemetry',{method:'POST',body:JSON.stringify({tenant:'company-b',metric:'p95_latency',value:3.7,baseline:1.1,unit:'seconds',endpoint:'/chat'})});
+  const result = await jfetch(api+'/customer-email',{method:'POST',body:JSON.stringify({tenant:'company-b',customer:'Beta Support',subject:'응답 속도가 어제부터 너무 느립니다',body:'평소 1초 정도였는데 지금은 3~4초씩 걸립니다.'})});
+  out(result.incident);
+  await refresh();
+}
+async function triage(id){ out(await jfetch(`${api}/incidents/${id}/triage`,{method:'POST'})); await refresh(); }
+async function makeFixTask(id){ try{out(await jfetch(`${api}/incidents/${id}/fix-task`,{method:'POST'}));}catch(error){out(String(error));} await refresh(); }
+async function verify(id){
+  out(await jfetch(`${api}/incidents/${id}/verify`,{method:'POST',body:JSON.stringify({ci_passed:true,deploy_succeeded:true,production_healthy:true,notes:'Demo: service metrics returned to the normal range.'})}));
+  await refresh();
+}
+refresh();
+</script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: mini-chatgpt
+spec:
+  # Two replicas on purpose. This is the payoff for JWT being stateless:
+  # a request can land on either pod and both can verify the token alone.
+  # With server-side sessions this line would be the start of a redesign,
+  # not a number you change.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never drop below the current replica count
+      maxSurge: 1         # add one new pod, wait for it to be ready, then retire an old one
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      containers:
+        - name: app
+          image: mini-chatgpt:local
+          # kind does not pull from a registry for locally-loaded images.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: JWT_SECRET_KEY
+
+          # Liveness asks "is this process wedged?" -- if it fails, kubelet
+          # kills the container. It hits /health, which checks nothing else.
+          # Pointing this at /ready would mean a brief Postgres outage
+          # restarts every healthy app pod, turning a blip into an outage.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+
+          # Readiness asks "should this pod receive traffic?" -- if it fails,
+          # the pod is removed from the Service endpoints but left running.
+          # It hits /ready, which does check Postgres and Redis.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 2
+
+          resources:
+            requests:
+              memory: 192Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+              cpu: 500m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: mini-chatgpt
+spec:
+  # ClusterIP: reachable only from inside the cluster. The Ingress is what
+  # exposes it outward. Change this to NodePort and you can hit it directly
+  # on a node port -- worth trying once to feel the difference.
+  type: ClusterIP
+  selector:
+    app: app
+  ports:
+    - port: 8000
+      targetPort: 8000

@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+nginx/certs/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# IncidentOps runtime artifacts
+incidentops/data/*.db
+incidentops/data/artifacts/

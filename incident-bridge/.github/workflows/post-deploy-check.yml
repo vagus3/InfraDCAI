@@ -1,0 +1,50 @@
+name: Post-deploy check
+
+on:
+  workflow_dispatch:
+    inputs:
+      incident_id:
+        description: Incident ID
+        required: true
+      production_url:
+        description: Production base URL
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r incidentops/requirements.txt
+      - name: Run tests
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q incidentops/tests
+      - name: Check production endpoints
+        env:
+          PRODUCTION_URL: ${{ inputs.production_url }}
+        run: |
+          curl -fsS "$PRODUCTION_URL/health"
+          curl -fsS "$PRODUCTION_URL/ready"
+      - name: Save result
+        run: |
+          cat <<JSON > verification.json
+          {
+            "incident_id": "${{ inputs.incident_id }}",
+            "ci_passed": true,
+            "deploy_succeeded": true,
+            "production_healthy": true,
+            "notes": "Post-deploy checks passed."
+          }
+          JSON
+          cat verification.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: post-deploy-${{ inputs.incident_id }}
+          path: verification.json

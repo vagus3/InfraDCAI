@@ -1,0 +1,84 @@
+# Postgres is a StatefulSet, not a Deployment.
+#
+# A Deployment treats its pods as interchangeable: it can create the new one
+# before deleting the old one, and the pods get random names. Neither is safe
+# for a database -- two Postgres processes on the same volume corrupt it, and
+# a pod that loses its identity loses its data.
+#
+# A StatefulSet gives stable names (postgres-0), stable storage bound to that
+# name, and ordered, one-at-a-time replacement.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: mini-chatgpt
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: chatuser
+            - name: POSTGRES_DB
+              value: chatdb
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "chatuser", "-d", "chatdb"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 512Mi
+
+  # volumeClaimTemplates creates one PVC per pod, and -- importantly -- does
+  # NOT delete it when the StatefulSet is deleted. Try it: delete the
+  # StatefulSet, reapply, and your data is still there.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: mini-chatgpt
+spec:
+  # clusterIP: None makes this a "headless" Service: DNS returns the pod IP
+  # directly instead of a load-balancing virtual IP. For a single database
+  # you want to reach *that* pod, not a random one behind a VIP.
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432

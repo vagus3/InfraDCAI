@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: mini-chatgpt
+data:
+  # Note the hostnames: "postgres" and "redis" are Service names. CoreDNS
+  # resolves them inside the cluster, the same way Compose resolved service
+  # names on its bridge network. Same idea, different implementation.
+  DATABASE_URL: postgresql+asyncpg://chatuser:chatpass@postgres:5432/chatdb
+  REDIS_URL: redis://redis:6379/0
+  OLLAMA_BASE_URL: http://ollama:11434
+  LLM_PROVIDER: ollama
+  OLLAMA_MODEL: llama3.2
+  ENVIRONMENT: kubernetes
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+  namespace: mini-chatgpt
+type: Opaque
+stringData:
+  # A Secret is base64-encoded, NOT encrypted. Anyone with read access to this
+  # namespace can run `kubectl get secret app-secrets -o yaml | base64 -d`.
+  # It is stored in plaintext in etcd unless encryption-at-rest is enabled.
+  #
+  # Committing this file is exactly as bad as committing a .env. Real answers:
+  # Sealed Secrets, External Secrets Operator, or the cloud provider's own
+  # secret store -- which is what the EC2 deployment does with SSM.
+  JWT_SECRET_KEY: local-dev-only-do-not-reuse
+  POSTGRES_PASSWORD: chatpass

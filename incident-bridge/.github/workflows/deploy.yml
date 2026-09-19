@@ -1,0 +1,105 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # Two deploys racing onto one instance leaves it in an undefined state.
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # required to request the OIDC token
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assume AWS role via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          # The commit sha is the tag. "latest" alone makes it impossible to
+          # tell which code is actually running, or to roll back to a version.
+          docker build -t "$REPOSITORY:$GITHUB_SHA" -t "$REPOSITORY:latest" .
+          docker push "$REPOSITORY:$GITHUB_SHA"
+          docker push "$REPOSITORY:latest"
+
+      - name: Run deploy script on the instance
+        id: send
+        env:
+          INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+        run: |
+          # SSM rather than SSH: no port 22 open, no private key stored here.
+          command_id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy $GITHUB_SHA" \
+            --parameters "commands=['/opt/app/deploy.sh $GITHUB_SHA']" \
+            --query Command.CommandId --output text)
+          echo "command_id=$command_id" >> "$GITHUB_OUTPUT"
+          echo "Dispatched SSM command $command_id"
+
+      - name: Wait for the deploy to finish
+        env:
+          INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+          COMMAND_ID: ${{ steps.send.outputs.command_id }}
+        run: |
+          for _ in $(seq 1 60); do
+            status=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)
+
+            case "$status" in
+              Success)
+                echo "Deploy succeeded."
+                exit 0
+                ;;
+              Failed|Cancelled|TimedOut)
+                echo "Deploy reported $status. Instance output:"
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
+                  --query StandardErrorContent --output text
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+
+          echo "Timed out waiting on the deploy."
+          exit 1
+
+      - name: Verify the site is serving
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          # The deploy script already gated on /ready inside the box. This
+          # checks the same thing from outside, through Caddy and TLS, which
+          # is the only path a real user takes.
+          for _ in $(seq 1 10); do
+            if curl -fsS "$SITE_URL/health" > /dev/null; then
+              echo "$SITE_URL is up."
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Deploy finished but the public URL is not answering."
+          exit 1

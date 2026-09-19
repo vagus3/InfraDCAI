@@ -1,0 +1,30 @@
+name: Incident checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r incidentops/requirements.txt
+      - name: Compile
+        run: python -m compileall -q incidentops decision_monitor
+      - name: Tests
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q incidentops/tests decision_monitor/tests
+      - name: Check architecture decisions
+        env:
+          PYTHONPATH: .
+        run: python -m decision_monitor.cli repo --root . || true

@@ -1,0 +1,193 @@
+#!/bin/bash
+# Rendered by Terraform (templatefile). Runs once, at first boot.
+# Braced variables meant for the shell or for compose are written $${VAR},
+# since Terraform treats a bare $${ as its own interpolation opener.
+set -euxo pipefail
+
+dnf update -y
+dnf install -y docker
+systemctl enable --now docker
+usermod -aG docker ec2-user
+
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -SL https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+mkdir -p /opt/app
+cd /opt/app
+
+# ---------------------------------------------------------------------------
+# Reverse proxy
+#
+# Local development uses nginx, which is worth writing by hand once to see
+# what a proxy actually configures. Here Caddy handles TLS: it requests and
+# renews a Let's Encrypt certificate for this hostname on its own, which is
+# the part that would otherwise be a cron job waiting to expire at 3am.
+# ---------------------------------------------------------------------------
+cat > Caddyfile <<'CADDY_EOF'
+${site_address} {
+    encode gzip
+
+    reverse_proxy app:8000 {
+        # Caddy's equivalent of nginx's proxy_buffering off. Without it the
+        # SSE chunks sit in a buffer and the client sees no streaming.
+        flush_interval -1
+    }
+}
+CADDY_EOF
+
+# ---------------------------------------------------------------------------
+# Service definitions
+#
+# No Ollama here: a t3.micro has 1 GB of RAM and no GPU, so the deployed app
+# calls the OpenAI API instead. See DECISIONS.md.
+# ---------------------------------------------------------------------------
+cat > docker-compose.yml <<'COMPOSE_EOF'
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chatuser
+      POSTGRES_PASSWORD: $${POSTGRES_PASSWORD}
+      POSTGRES_DB: chatdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatuser -d chatdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: $${APP_IMAGE}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://chatuser:$${POSTGRES_PASSWORD}@postgres:5432/chatdb
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: $${JWT_SECRET_KEY}
+      LLM_PROVIDER: openai
+      OPENAI_API_KEY: $${OPENAI_API_KEY}
+      OPENAI_MODEL: $${OPENAI_MODEL}
+      ENVIRONMENT: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Bound to loopback, not 0.0.0.0: the host can health-check it directly
+    # but nothing outside the box can reach it, proxy or not.
+    ports:
+      - "127.0.0.1:8000:8000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+COMPOSE_EOF
+
+# ---------------------------------------------------------------------------
+# Deploy script, invoked by GitHub Actions over SSM
+# ---------------------------------------------------------------------------
+cat > deploy.sh <<'DEPLOY_EOF'
+#!/bin/bash
+set -euo pipefail
+exec >> /var/log/app-deploy.log 2>&1
+
+IMAGE_TAG="$${1:?usage: deploy.sh <image-tag>}"
+cd /opt/app
+
+echo "=== deploy started $(date -Is) tag=$IMAGE_TAG ==="
+
+PREVIOUS_IMAGE="$(cat .last_good_image 2>/dev/null || true)"
+
+aws ecr get-login-password --region ${aws_region} \
+  | docker login --username AWS --password-stdin ${ecr_registry}
+
+ssm_get() {
+  aws ssm get-parameter --name "$1" --with-decryption \
+    --region ${aws_region} --query Parameter.Value --output text
+}
+
+# Secrets are pulled at deploy time and written with 600. They exist on disk
+# only as this file, never in the repository or the Terraform state.
+umask 077
+{
+  echo "APP_IMAGE=${ecr_repo_url}:$IMAGE_TAG"
+  echo "POSTGRES_PASSWORD=$(ssm_get ${ssm_prefix}/postgres_password)"
+  echo "JWT_SECRET_KEY=$(ssm_get ${ssm_prefix}/jwt_secret_key)"
+  echo "OPENAI_API_KEY=$(ssm_get ${ssm_prefix}/openai_api_key)"
+  echo "OPENAI_MODEL=${openai_model}"
+} > .env
+
+docker compose pull
+docker compose up -d --remove-orphans
+
+# Wait for readiness, not liveness: the container answering /health only
+# means uvicorn booted. /ready means it can actually reach its dependencies.
+healthy=0
+for _ in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:8000/ready > /dev/null 2>&1; then
+    healthy=1
+    break
+  fi
+  sleep 3
+done
+
+if [ "$healthy" = "1" ]; then
+  echo "$IMAGE_TAG" > .last_good_image
+  docker image prune -f
+  echo "=== deploy ok $(date -Is) ==="
+  exit 0
+fi
+
+echo "!!! new image never became ready"
+curl -s http://127.0.0.1:8000/ready || true
+docker compose logs --tail 50 app || true
+
+if [ -n "$PREVIOUS_IMAGE" ]; then
+  echo "!!! rolling back to $PREVIOUS_IMAGE"
+  sed -i "s|^APP_IMAGE=.*|APP_IMAGE=${ecr_repo_url}:$PREVIOUS_IMAGE|" .env
+  docker compose up -d
+  echo "=== rolled back $(date -Is) ==="
+else
+  echo "!!! no previous image recorded, nothing to roll back to"
+fi
+
+exit 1
+DEPLOY_EOF
+
+chmod +x deploy.sh
+echo "user-data finished at $(date -Is)"

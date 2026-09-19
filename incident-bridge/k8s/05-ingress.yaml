@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app
+  namespace: mini-chatgpt
+  annotations:
+    # Third time configuring the same thing in a different system:
+    #   nginx.conf   -> proxy_buffering off
+    #   Caddyfile    -> flush_interval -1
+    #   Ingress      -> this annotation
+    # Remove it and streaming breaks in exactly the same way each time.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app
+                port:
+                  number: 8000
