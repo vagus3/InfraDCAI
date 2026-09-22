@@ -5,12 +5,12 @@
 
 ## 오늘 남은 일
 
-1. **최신 작업을 심사자가 볼 수 있게 올리기.** 확인 시점의 원격 `main`은 `f47cbd7`이고
-   원격 `feature/infra`는 없었다. 현재 수정은 로컬 `feature/infra`에 있다. 변경 내역을 확인해
-   커밋·push한 후 그 브랜치의 프로젝트 README 링크를 제출하거나, 배포 영향을 검토한 뒤
-   기본 브랜치에 반영한다. main push는 workflow를 실행할 수 있으므로 무심코 병합하지 않는다.
-2. **외부에서 링크 열기.** 로그인하지 않은 창 또는 심사자가 가진 권한으로 README·코드·
-   실험 기록이 열리는지 확인한다. 로컬 파일 경로는 제출 링크가 아니다.
+1. **제출 링크 선택.** 수정 커밋 `756f077`을 공개 저장소의 `feature/infra`에 업로드했다.
+   [최신 포트폴리오](https://github.com/vagus3/InfraDCAI/tree/feature/infra)를 제출한다.
+   `main`은 이전 버전이므로 저장소 기본 URL만 제출하지 않는다. main 병합은 자동 배포를
+   실행할 수 있어 이번 작업에서 제외했다.
+2. **제출 직전 링크 재확인.** 저장소의 public 설정과 원격 커밋 일치를 비인증 조회로 확인했다.
+   폼에 붙여 넣은 링크에서도 README·코드·실험 기록이 열리는지 확인한다.
 3. **폼이 요구하는 설명·자료 채우기.** 프로젝트 문제, 본인 역할, 구현한 범위, 실험 결과,
    미완성 범위를 분리한다. 영상이 요구되면 아래 흐름으로 짧게 녹화한다. 요구하지 않는
    PDF·영상·새 배포를 마감 직전에 필수 작업으로 늘리지 않는다.
@@ -47,7 +47,9 @@ AI가 감시 대상 앱에서 사용되는 것과 운영 분석에서 사용되�
 - `INCIDENTOPS_TRIAGE_WEBHOOK_URL='' PYTHONPATH=. .venv/bin/python -m incidentops.demo all`: 두 합성 시나리오 완료.
 - 브라우저: 토큰 연결, A의 OPEN → TRIAGED → READY_FOR_FIX → RESOLVED, B의 alert gap 표시 확인.
   관찰한 인터랙션 중 JS error/unhandled rejection 없음. 인터넷 공개 배포 검증은 아니다.
-- CI 검사 대상에 `app/tests`를 추가했지만, 원격 CI 결과는 아직 확인하지 않았다.
+- CI 검사 대상에 `app/tests`를 포함하고 `feature/infra` push에서도 테스트만 실행하도록 했다.
+  [브랜치별 CI 결과](https://github.com/vagus3/InfraDCAI/actions/workflows/incident-ci.yml?query=branch%3Afeature%2Finfra)에서
+  제출할 커밋의 결과를 확인한다. AWS 배포 workflow는 변경하지 않았다.
 
 ## 오늘 마감 전에 새로 벌이지 않을 일
 

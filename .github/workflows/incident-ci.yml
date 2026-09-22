@@ -3,7 +3,7 @@ name: Incident checks
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feature/infra]
 
 permissions:
   contents: read
