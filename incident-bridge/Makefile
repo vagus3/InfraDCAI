@@ -4,7 +4,7 @@ install:
 	python -m pip install -r incidentops/requirements.txt
 
 test:
-	PYTHONPATH=. python -m pytest -q incidentops/tests decision_monitor/tests
+	PYTHONPATH=. python -m pytest -q incidentops/tests decision_monitor/tests app/tests
 
 demo:
 	PYTHONPATH=. python -m incidentops.demo all

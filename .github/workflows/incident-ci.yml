@@ -22,15 +22,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
       - name: Install dependencies
         run: pip install -r incidentops/requirements.txt
       - name: Compile
-        run: python -m compileall -q incidentops decision_monitor
+        run: python -m compileall -q incidentops decision_monitor app
       - name: Tests
         env:
           PYTHONPATH: .
-        run: python -m pytest -q incidentops/tests decision_monitor/tests
+        run: python -m pytest -q incidentops/tests decision_monitor/tests app/tests
       - name: Check architecture decisions
         env:
           PYTHONPATH: .

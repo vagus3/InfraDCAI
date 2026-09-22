@@ -151,19 +151,19 @@
 (고객 문의 원문 등 `fact.details` 제외), `app/routers/chat.py`가 `UpstreamIncompleteError`를
 `httpx` 오류와 같은 방식으로 처리하도록 연결.
 
-의도적으로 남겨둔 것:
+남은 항목 (2026-09-22 갱신):
 
-- `triage.py`의 `_from_webhook()`은 여전히 incident 전체를 직렬화해 외부 triage webhook으로
-  보낸다. `dispatch_fix`/`send_notification`과 같은 종류의 노출이지만 이 표에 명시되지 않아
-  범위를 넘겨 고치지 않았다.
+- triage 요청도 허용 목록을 사용하도록 수정했다. 고객 fact의 이름/제목 요약과 이전 triage 출력은
+  제외하며, 외부 오류 시 `UNKNOWN`으로 보류한다. 전송하는 모든 자유 텍스트가 익명화됐다는
+  뜻은 아니다. fix task 본문과 알림 문안의 별도 검토, 실고객 데이터 처리는 여전히 과제다.
 - `IncidentStore`의 SQLite 호출은 `async def` 안에서 동기로 실행된다(§5의 blocking I/O 원칙).
   표에는 `integrations/notifications.py`의 SMTP만 명시돼 있었고, 이건 우선순위 표의 마지막
   항목("측정에 따른 조회 최적화")에 가까운 성격이라 손대지 않았다.
 - `/api/v1/incidents` 조회는 여전히 페이지 크기 제한이 없다. 우선순위 표가 조회 최적화를
   가장 뒤로 두었고 아직 측정하지 않았다.
 
-공개 노출 전에는 대시보드의 외부 문자열 렌더링과 입력 인증부터 별도로 점검한다는 문장은
-이제 완료된 항목을 가리킨다. 다음에 볼 것은 위 "의도적으로 남겨둔 것"이다.
+DOM 출력 방식과 공통 토큰 검사는 반영했지만, 공개 배포의 TLS·tenant별 권한·접근 제한 검증은
+완료하지 않았다. 코드 검사 통과와 공개 운영 적합성을 구분한다.
 학습 순서는 [LEARNING.md](LEARNING.md), 동작 규약은 [DESIGN.md](DESIGN.md)를 따른다.
 
 ### 추가 확인 — 2026-09-20, 2026-09-20 수정 반영
@@ -181,12 +181,10 @@
 endpoint/symptom까지 포함한 전체 상관 조건(DESIGN.md 3번)은 아직 시간 창만 적용했다. 같은 시간
 창 안에서 서로 다른 endpoint/symptom의 신호가 합쳐지는 경우는 남아 있다.
 
-별도로 정적 확인했던 사항(수정됨): `incidentops/api.py`에는 자체 인증·작업 권한 검사가 없었다.
-`fix-dispatch`·`notify`·`verify`는 이제 `INCIDENTOPS_API_TOKEN`이 설정된 경우 `Authorization:
-Bearer` 검사를 거친다. 미설정 시 이전과 동일하게 열려 있으며, 이것이 미설정 배포를 노출해도
-안전하다는 뜻은 아니다. integrations의 webhook payload는 incident 전체를 포함했으나 이제
-`external.py`의 허용 목록만 나간다(고객 문의 원문 등 `fact.details`는 제외). 배포 앞단의
-접근 제한 유무와 실제 외부 노출 여부는 이번에도 검증하지 않았다.
+2026-09-22: `INCIDENTOPS_API_TOKEN` 검사를 조회·수집을 포함한 `/api/v1/*` 전체로 확대했다.
+토큰 미설정은 503, 요청 토큰 누락·불일치는 403이다. 화면에는 메모리 내 토큰 입력을 추가했고
+collector는 ingest에만 인증 헤더를 붙인다. 기존 SQLite에 dedup 컬럼이 없어 기동하지 못하는
+문제도 데이터 삭제 없는 컬럼 추가로 처리했다. 배포 앞단과 실제 외부 노출 여부는 미검증이다.
 
 우선순위는 공개 공유 전 접근 통제·안전한 화면 출력·전송 데이터 범위, 핵심 기능 정확성을 위한
 시간/상관/중복 처리·증거 기반 회복 판정, 이후 측정에 따른 조회 최적화 순이다.

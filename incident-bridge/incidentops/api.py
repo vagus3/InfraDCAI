@@ -3,7 +3,7 @@ from __future__ import annotations
 import hmac
 from contextlib import asynccontextmanager, contextmanager
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from incidentops.config import settings
@@ -44,21 +44,15 @@ def _map_domain_errors():
 
 
 def require_action_token(authorization: str | None = Header(default=None)) -> None:
-    """Gates dispatching a fix, sending a customer notification, and
-    approving recovery -- the three actions CODE_RULES.md #8 calls out as
-    needing caller authorization, since each can trigger something external
-    (a webhook call, an email) or close an incident out.
-
-    When INCIDENTOPS_API_TOKEN is unset -- the local-demo default -- this is
-    a no-op and these endpoints stay open, exactly as before. That is a
-    statement about what this check does, not a claim that an unconfigured
-    deployment is safe to expose; see README.md/DESIGN.md.
-    """
+    """One operator token protects both incident data and state changes."""
     if not settings.api_token:
-        return
+        raise HTTPException(503, "Incident API is disabled: configure INCIDENTOPS_API_TOKEN")
     expected = f"Bearer {settings.api_token}"
-    if not authorization or not hmac.compare_digest(authorization, expected):
+    if not authorization or not hmac.compare_digest(authorization.encode(), expected.encode()):
         raise HTTPException(403, "missing or invalid action token")
+
+
+router = APIRouter(prefix="/api/v1", dependencies=[Depends(require_action_token)])
 
 
 @app.get("/")
@@ -71,46 +65,43 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/api/v1/incidents")
+@router.get("/incidents")
 def incidents(tracker: IncidentTracker = Depends(get_tracker)):
     return [incident.model_dump(mode="json") for incident in tracker.list_incidents()]
 
 
-@app.get("/api/v1/incidents/{incident_id}")
+@router.get("/incidents/{incident_id}")
 def incident(incident_id: str, tracker: IncidentTracker = Depends(get_tracker)):
     with _map_domain_errors():
         return tracker.get(incident_id).model_dump(mode="json")
 
 
-@app.post("/api/v1/signals/telemetry")
+@router.post("/signals/telemetry")
 async def telemetry(signal: TelemetrySignal, tracker: IncidentTracker = Depends(get_tracker)):
     incident = await tracker.record_telemetry(signal)
     return {"incident": incident.model_dump(mode="json") if incident else None}
 
 
-@app.post("/api/v1/customer-email")
+@router.post("/customer-email")
 async def customer_email(email: CustomerEmail, tracker: IncidentTracker = Depends(get_tracker)):
     incident = await tracker.record_customer_email(email)
     return {"incident": incident.model_dump(mode="json")}
 
 
-@app.post("/api/v1/incidents/{incident_id}/triage")
+@router.post("/incidents/{incident_id}/triage")
 async def triage(incident_id: str, tracker: IncidentTracker = Depends(get_tracker)):
     with _map_domain_errors():
         return (await tracker.triage_incident(incident_id)).model_dump(mode="json")
 
 
-@app.post("/api/v1/incidents/{incident_id}/fix-task")
+@router.post("/incidents/{incident_id}/fix-task")
 def fix_task(incident_id: str, tracker: IncidentTracker = Depends(get_tracker)):
     with _map_domain_errors():
         incident, path = tracker.create_fix_task(incident_id)
         return {"incident": incident.model_dump(mode="json"), "task": str(path)}
 
 
-@app.post(
-    "/api/v1/incidents/{incident_id}/fix-dispatch",
-    dependencies=[Depends(require_action_token)],
-)
+@router.post("/incidents/{incident_id}/fix-dispatch")
 async def fix_dispatch(incident_id: str, tracker: IncidentTracker = Depends(get_tracker)):
     with _map_domain_errors():
         incident, path = tracker.create_fix_task(incident_id)
@@ -118,22 +109,19 @@ async def fix_dispatch(incident_id: str, tracker: IncidentTracker = Depends(get_
     return {"incident": incident.model_dump(mode="json"), "task": str(path), "dispatch": dispatch}
 
 
-@app.post(
-    "/api/v1/incidents/{incident_id}/verify",
-    dependencies=[Depends(require_action_token)],
-)
+@router.post("/incidents/{incident_id}/verify")
 def verify(incident_id: str, request: VerificationRequest, tracker: IncidentTracker = Depends(get_tracker)):
     with _map_domain_errors():
         return tracker.verify(incident_id, request).model_dump(mode="json")
 
 
-@app.post(
-    "/api/v1/incidents/{incident_id}/notify",
-    dependencies=[Depends(require_action_token)],
-)
+@router.post("/incidents/{incident_id}/notify")
 async def notify(incident_id: str, tracker: IncidentTracker = Depends(get_tracker)):
     with _map_domain_errors():
         incident = tracker.get(incident_id)
     message = tracker.reports.customer_message(incident)
     channel = await send_notification(incident, message)
     return {"channel": channel, "message": message}
+
+
+app.include_router(router)

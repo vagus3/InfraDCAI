@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from incidentops.models import Incident
+from incidentops.models import Incident, SignalSource
 
 
 def external_incident_summary(incident: Incident) -> dict[str, Any]:
@@ -15,8 +15,8 @@ def external_incident_summary(incident: Incident) -> dict[str, Any]:
     configured, which CODE_RULES.md #8 asks to avoid by naming the fields
     that actually need to leave instead.
 
-    Only `fact.summary` goes out -- already a short, constructed string, not
-    raw external content -- never `fact.details`.
+    Customer summaries include names and subjects, so omit them as well as
+    details. Previous triage output is excluded: it can quote those inputs.
     """
     return {
         "id": incident.id,
@@ -35,10 +35,10 @@ def external_incident_summary(incident: Incident) -> dict[str, Any]:
             {
                 "source": fact.source.value,
                 "kind": fact.kind,
-                "summary": fact.summary,
+                "summary": "Customer reported a service issue"
+                if fact.source == SignalSource.CUSTOMER_EMAIL else fact.summary,
                 "observed_at": fact.observed_at.isoformat(),
             }
             for fact in incident.facts
         ],
-        "triage": incident.triage.model_dump(mode="json") if incident.triage else None,
     }

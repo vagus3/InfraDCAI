@@ -29,7 +29,14 @@
 <body>
 <main>
   <h1>Incident Bridge</h1>
-  <div class="sub">고객 문의와 서비스 지표를 같은 incident로 묶고, 수정 후 실제 서비스 상태까지 확인합니다.</div>
+  <div class="sub">고객 문의와 서비스 지표를 연결하는 프로토타입입니다. 아래 회복 판정은 합성 데모입니다.</div>
+
+  <div class="card" style="margin-bottom:24px">
+    <label for="apiToken">운영 도구 API 토큰</label>
+    <input id="apiToken" type="password" autocomplete="off" spellcheck="false" />
+    <button type="button" id="connectBtn">연결</button>
+    <p class="sub">서버의 INCIDENTOPS_API_TOKEN 값을 입력하세요. 브라우저 저장소에 저장하지 않습니다.</p>
+  </div>
 
   <div class="grid">
     <div class="card"><div>Open incidents</div><div class="metric" id="openCount">0</div></div>
@@ -62,8 +69,16 @@ const out = (value) => {
 };
 
 async function jfetch(url, opts = {}) {
-  const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
-  const body = await response.json();
+  const token = document.getElementById('apiToken').value;
+  if (!token) throw new Error('API 토큰을 입력하고 연결하세요.');
+  const response = await fetch(url, {
+    ...opts,
+    headers: { ...opts.headers, 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+  });
+  const text = await response.text();
+  let body;
+  try { body = text ? JSON.parse(text) : null; }
+  catch { throw new Error(`서버 응답을 읽을 수 없습니다 (HTTP ${response.status}).`); }
   if (!response.ok) throw new Error(JSON.stringify(body));
   return body;
 }
@@ -75,7 +90,7 @@ function actionButton(label, handler) {
   button.textContent = label;
   // A listener bound to a closure over item.id, not a string built from it --
   // nothing here is assembled into an executable attribute.
-  button.addEventListener('click', handler);
+  button.addEventListener('click', () => Promise.resolve().then(handler).catch((e) => out(String(e))));
   return button;
 }
 
@@ -205,8 +220,9 @@ async function verify(id) {
 document.getElementById('demoMonitorBtn').addEventListener('click', () => demoMonitor().catch((e) => out(String(e))));
 document.getElementById('demoCustomerBtn').addEventListener('click', () => demoCustomer().catch((e) => out(String(e))));
 document.getElementById('refreshBtn').addEventListener('click', () => refresh().catch((e) => out(String(e))));
+document.getElementById('connectBtn').addEventListener('click', () => refresh().catch((e) => out(String(e))));
 
-refresh();
+out('API 토큰을 입력하고 연결하세요. 합성 데이터만 사용하세요.');
 </script>
 </body>
 </html>

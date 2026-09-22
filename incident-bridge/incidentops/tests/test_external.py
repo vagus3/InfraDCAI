@@ -41,9 +41,8 @@ def test_external_summary_excludes_raw_customer_email_body():
     summary = external_incident_summary(incident)
 
     assert secret not in json.dumps(summary, ensure_ascii=False)
-    # The constructed, short summary is still present -- only the raw body,
-    # which lives in fact.details, is excluded.
-    assert summary["facts"][0]["summary"] == "Someone: subject line"
+    assert "Someone: subject line" not in json.dumps(summary)
+    assert summary["facts"][0]["summary"] == "Customer reported a service issue"
     assert "details" not in summary["facts"][0]
 
 

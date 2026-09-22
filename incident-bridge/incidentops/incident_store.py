@@ -50,6 +50,14 @@ class IncidentStore:
         self.db_path = Path(db_path or settings.db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
+            # Existing demo databases predate resend tracking. Add nullable
+            # columns before SCHEMA creates the index; preserve their records.
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(customer_email)")}
+            if columns:
+                if "message_id" not in columns:
+                    conn.execute("ALTER TABLE customer_email ADD COLUMN message_id TEXT")
+                if "incident_id" not in columns:
+                    conn.execute("ALTER TABLE customer_email ADD COLUMN incident_id TEXT")
             conn.executescript(SCHEMA)
 
     @contextmanager

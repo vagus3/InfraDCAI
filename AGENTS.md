@@ -41,7 +41,7 @@ Python은 3.11을 쓴다. 검증된 조합은 3.11.15다. 과거 `asyncpg==0.29.
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt -r incidentops/requirements.txt
 
-PYTHONPATH=. .venv/bin/python -m pytest -q incidentops/tests decision_monitor/tests
+PYTHONPATH=. .venv/bin/python -m pytest -q incidentops/tests decision_monitor/tests app/tests
 PYTHONPATH=. .venv/bin/python -m incidentops.demo all
 PYTHONPATH=. .venv/bin/python -m decision_monitor.cli repo --root .
 PYTHONPATH=. .venv/bin/python -m uvicorn incidentops.api:app --port 8090
@@ -64,7 +64,8 @@ PYTHONPATH=. .venv/bin/python -m uvicorn incidentops.api:app --port 8090
 - `app/routers/chat.py`는 upstream 오류를 HTTP 200 스트림 안의 error 이벤트로 내보낸다.
   그래서 5xx 비율과 `/ready`만 보면 이 실패가 보이지 않는다. 이 프로젝트의 대표 실험이 바로
   이 실패를 관측 가능하게 만드는 것이다.
-- `app/` 에는 테스트가 없다. `pytest`가 통과해도 앱이 기동한다는 뜻이 아니다. requirements의
+- `app/tests`는 upstream 스트림 파서의 mock 테스트다. 통과해도 가입·로그인·DB·Redis를 포함한
+  앱 기동이 검증된 것은 아니다. requirements의
   핀 문제로 회원가입이 전부 500을 반환하던 동안에도 테스트는 전부 통과했다. 기록은
   `docs/experiments/2026-09-19-streaming-failure.md`에 있다.
 - `user-data.sh.tftpl`은 기본적으로 `set -euxo pipefail`이고 비밀번호 처리 구간만 추적을 끈다.
@@ -88,7 +89,7 @@ PYTHONPATH=. .venv/bin/python -m uvicorn incidentops.api:app --port 8090
 변경을 넣었으면 최소한 아래를 통과해야 한다.
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m pytest -q incidentops/tests decision_monitor/tests
+PYTHONPATH=. .venv/bin/python -m pytest -q incidentops/tests decision_monitor/tests app/tests
 PYTHONPATH=. .venv/bin/python -m decision_monitor.cli repo --root .   # exit 0 이어야 함
 ```
 

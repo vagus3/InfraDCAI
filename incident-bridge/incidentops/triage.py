@@ -3,13 +3,23 @@ from __future__ import annotations
 import httpx
 
 from incidentops.config import settings
+from incidentops.external import external_incident_summary
 from incidentops.models import Incident, IncidentType, TriageResult
 
 
 class IncidentTriage:
     async def run(self, incident: Incident) -> TriageResult:
         if settings.triage_webhook_url:
-            return await self._from_webhook(incident)
+            try:
+                return await self._from_webhook(incident)
+            except (httpx.HTTPError, ValueError):
+                fallback = self._from_rules(incident)
+                fallback.incident_type = IncidentType.UNKNOWN
+                fallback.confidence = "low"
+                fallback.probable_cause = "External triage unavailable or invalid; no cause confirmed."
+                fallback.next_step = "Review the collected facts manually before requesting a fix."
+                fallback.allowed_paths = []
+                return fallback
         return self._from_rules(incident)
 
     def _from_rules(self, incident: Incident) -> TriageResult:
@@ -86,13 +96,13 @@ class IncidentTriage:
     async def _from_webhook(self, incident: Incident) -> TriageResult:
         request_body = {
             "task": "triage_incident",
-            "incident": incident.model_dump(mode="json"),
+            "incident": external_incident_summary(incident),
             "response_schema": TriageResult.model_json_schema(),
         }
         async with httpx.AsyncClient(timeout=45) as client:
             response = await client.post(settings.triage_webhook_url, json=request_body)
             response.raise_for_status()
             body = response.json()
-            if "triage" in body:
+            if isinstance(body, dict) and "triage" in body:
                 body = body["triage"]
             return TriageResult.model_validate(body)

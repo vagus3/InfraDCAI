@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timezone
 import httpx
 
+from incidentops.config import settings
+
 
 async def run(target: str, ingest: str, tenant: str, interval: float):
     async with httpx.AsyncClient(timeout=10) as client:
@@ -17,7 +19,7 @@ async def run(target: str, ingest: str, tenant: str, interval: float):
                 response = await client.get(target.rstrip("/") + "/ready")
                 status = response.status_code
                 ready = 1.0 if response.is_success else 0.0
-            except Exception:
+            except httpx.HTTPError:
                 ready = 0.0
             latency = time.perf_counter() - started
             now = datetime.now(timezone.utc).isoformat()
@@ -26,9 +28,13 @@ async def run(target: str, ingest: str, tenant: str, interval: float):
                 {"tenant": tenant, "metric": "p95_latency", "value": latency, "unit": "seconds", "endpoint": "/ready", "observed_at": now, "labels": {"status": str(status)}},
             ]:
                 try:
-                    await client.post(ingest.rstrip("/") + "/api/v1/signals/telemetry", json=payload)
-                except Exception as exc:
-                    print(f"collector ingest failed: {exc}")
+                    headers = {"Authorization": f"Bearer {settings.api_token}"} if settings.api_token else {}
+                    response = await client.post(
+                        ingest.rstrip("/") + "/api/v1/signals/telemetry", json=payload, headers=headers,
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    print(f"collector ingest failed: {type(exc).__name__}")
             print(f"{now} ready={ready:.0f} latency={latency:.3f}s status={status}")
             await asyncio.sleep(interval)
 
